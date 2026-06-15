@@ -1,70 +1,67 @@
 import os
-
-os.environ["HF_HOME"] = r"D:\huggingface"
-os.environ["HUGGINGFACE_HUB_CACHE"] = r"D:\huggingface\hub"
-os.environ["TRANSFORMERS_CACHE"] = r"D:\huggingface\transformers"
-os.environ["TORCHDYNAMO_DISABLE"] = "1"
-os.environ["TORCH_COMPILE_DISABLE"] = "1"
-os.environ["PYTORCH_JIT"] = "0"
-
-from transformers import AutoProcessor, AutoModelForImageTextToText
-from PIL import Image
-import torch
+from pathlib import Path
 import time
 
-MODEL_ID = "allenai/Molmo2-4B"
-if not torch.cuda.is_available():
-    raise RuntimeError("CUDA is not available in this Python environment.")
+import torch
+from PIL import Image
+from transformers import AutoProcessor, AutoModelForImageTextToText
 
-DEVICE = torch.device("cuda:0")
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+IMAGE_PATH = PROJECT_ROOT / "001024.png"
+
+HF_HOME = Path("D:/huggingface")
+os.environ["HF_HOME"] = str(HF_HOME)
+os.environ["HF_HUB_CACHE"] = str(HF_HOME / "hub")
+os.environ["HF_MODULES_CACHE"] = str(HF_HOME / "modules")
+
+MODEL_ID = "allenai/Molmo2-4B"
+
+if not torch.cuda.is_available():
+    raise RuntimeError("CUDA is not available.")
+
+DEVICE = "cuda:0"
 DTYPE = torch.float16
+
 START_TIME = time.perf_counter()
 
 
-def log_step(message):
-    elapsed = time.perf_counter() - START_TIME
-    print(f"[{elapsed:7.2f}s] {message}", flush=True)
+def log(msg):
+    print(f"[{time.perf_counter() - START_TIME:7.2f}s] {msg}", flush=True)
 
 
-def print_cuda_memory(label):
-    free_bytes, total_bytes = torch.cuda.mem_get_info(DEVICE)
-    allocated_bytes = torch.cuda.memory_allocated(DEVICE)
-    reserved_bytes = torch.cuda.memory_reserved(DEVICE)
+def print_mem(label):
+    free_b, total_b = torch.cuda.mem_get_info()
     gib = 1024**3
-
     print(
-        f"{label}: free={free_bytes / gib:.2f} GiB, "
-        f"total={total_bytes / gib:.2f} GiB, "
-        f"allocated={allocated_bytes / gib:.2f} GiB, "
-        f"reserved={reserved_bytes / gib:.2f} GiB"
+        f"{label}: free={free_b/gib:.2f} GiB, "
+        f"total={total_b/gib:.2f} GiB"
     )
 
 
-log_step(f"CUDA device: {torch.cuda.get_device_name(DEVICE)}")
-print_cuda_memory("Before load")
+log(f"CUDA device: {torch.cuda.get_device_name(0)}")
+print_mem("Before load")
 
-log_step("Loading processor...")
+log("Loading processor...")
 processor = AutoProcessor.from_pretrained(
     MODEL_ID,
     trust_remote_code=True,
 )
 
-log_step("Loading model...")
+log("Loading model...")
 model = AutoModelForImageTextToText.from_pretrained(
     MODEL_ID,
     trust_remote_code=True,
-    dtype=DTYPE,
-    device_map={"": DEVICE},
+    torch_dtype=DTYPE,
+    device_map="auto",
     low_cpu_mem_usage=True,
 )
+
 model.eval()
-log_step(f"Loaded model on {DEVICE} with dtype={DTYPE}.")
-print_cuda_memory("After load")
 
-first_param = next(model.parameters())
-log_step(f"First parameter device={first_param.device}, dtype={first_param.dtype}")
+log("Model loaded.")
+print_mem("After load")
 
-image = Image.open("001024.png").convert("RGB")
+image = Image.open(IMAGE_PATH).convert("RGB")
 
 messages = [
     {
@@ -79,7 +76,7 @@ messages = [
     }
 ]
 
-log_step("Preparing inputs...")
+log("Preparing inputs...")
 
 inputs = processor.apply_chat_template(
     messages,
@@ -90,14 +87,11 @@ inputs = processor.apply_chat_template(
 )
 
 inputs = {
-    k: v.to(DEVICE, non_blocking=True)
-    if hasattr(v, "to")
-    else v
+    k: v.to(model.device) if hasattr(v, "to") else v
     for k, v in inputs.items()
 }
-print_cuda_memory("After inputs")
 
-log_step("Generating...")
+log("Generating...")
 
 with torch.inference_mode():
     output = model.generate(
@@ -105,13 +99,10 @@ with torch.inference_mode():
         max_new_tokens=128,
         do_sample=False,
     )
-torch.cuda.synchronize(DEVICE)
-log_step("Finished generation.")
-print_cuda_memory("After generation")
 
-generated_tokens = output[0, inputs["input_ids"].size(1):]
+generated_tokens = output[0, inputs["input_ids"].shape[1]:]
 
-generated_text = processor.tokenizer.decode(
+generated_text = processor.decode(
     generated_tokens,
     skip_special_tokens=True,
 )

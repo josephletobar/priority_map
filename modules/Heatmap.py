@@ -9,7 +9,8 @@ from ultralytics import YOLOWorld
 class Region:
     mask: np.ndarray
     label: str
-    score: float
+    id: str
+    score: float   
 
 Node = Region
 
@@ -64,7 +65,8 @@ class Heatmap:
             Region(
                 mask=mask,
                 label=label,
-                score=score
+                score=score,
+                id=""
             )
         )
 
@@ -75,10 +77,18 @@ class Heatmap:
                     mask=region.mask > 0,
                     label=region.label,
                     score=region.score,
+                    id=""
                 )
             )
 
         self.nodes = merge_similar(self.nodes)
+
+        counts = {}
+        for node in self.nodes:
+            idx = counts.get(node.label, 0)
+            counts[node.label] = idx + 1
+            node.id = f"{node.label}_{idx}"
+
 
     def _create_heatmap(self, image):
         heatmap = np.zeros(image.shape[:2], dtype=np.float32)

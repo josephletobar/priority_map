@@ -11,6 +11,7 @@ def merge(a, b):
         mask=np.logical_or(a.mask > 0, b.mask > 0),
         label=merged_label,
         score=merged_score,
+        id=""
     )
 
 def similar(a, b):

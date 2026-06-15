@@ -1,11 +1,19 @@
+import os
+os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
+
 from pathlib import Path
 import cv2
 import pandas as pd
 import traceback
+from dotenv import load_dotenv
 
 from modules.SceneUnderstanding import SceneUnderstanding
 from modules.Heatmap import Heatmap
+from modules.GraphBuilder import GraphBuilder
+from modules.GraphChat import ChatWithGraph
 from scripts.video_output import create_video_writer, release_video_writer
+
+load_dotenv()
 
 class DroneHeatmap: 
     def __init__(self, dataset_root: str, task="Find cars", sam_step=15):
@@ -20,6 +28,7 @@ class DroneHeatmap:
         self.index = 0
 
         self.scene_understanding = SceneUnderstanding()
+        self.graph_builder = GraphBuilder()
         self.heatmap = Heatmap()
         self.video_writer = None
         self.video_path = None
@@ -154,14 +163,23 @@ class DroneHeatmap:
             # print(scene_dict)
 
             heatmap = self.heatmap.get(image, scene_dict)
+
+            print(f"Frame {frame['frame_index']}:", end=" ")
+            for node in self.heatmap.nodes:
+                print(node.id, end=" ")
+            print()
+
             if heatmap is not None: out = heatmap
+
+            self.graph_builder.build_graph(self.heatmap.nodes)
+            self.graph_builder.draw_2d_graph()
 
             self.show_video(out)
         
 
 if __name__ == "__main__":
 
-    drone = DroneHeatmap(r"C:\Users\jleto\Downloads\Train\Train")
+    drone = DroneHeatmap(r"D:\Train\Train")
 
     try:
         while drone.has_next():
@@ -173,3 +191,11 @@ if __name__ == "__main__":
     finally:
         drone.close_video()
         cv2.destroyAllWindows()
+
+        final_graph = drone.graph_builder.draw_3d_graph()
+        
+        chat = ChatWithGraph(final_graph)
+        while True:
+            chat.chat()
+
+
