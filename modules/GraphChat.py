@@ -1,7 +1,7 @@
 from openai import OpenAI
 import json
 from dotenv import load_dotenv
-from networkx.readwrite import json_graph
+from modules.GraphBuilder import GraphBuilder
 
 # Old project imports for embedding/RAG retrieval. Current heatmap graph only has
 # node id, label, score, and simple edges.
@@ -110,14 +110,9 @@ class ChatWithGraph:
             subgraph = self.graph.copy()
 
 
-        # remove embeddings attributes for llm
-        for _, attrs in subgraph.nodes(data=True):
-                attrs.pop("txt_embedding", None)
-                attrs.pop("img_embedding", None)
-
         # in memory json
         graph_json = json.dumps(
-                json_graph.node_link_data(subgraph),
+                GraphBuilder.to_serializable_data(subgraph),
                 indent=2
             )
 

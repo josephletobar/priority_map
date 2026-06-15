@@ -6,6 +6,8 @@ import networkx as nx
 from networkx.readwrite import json_graph
 from pathlib import Path
 import json
+from types import SimpleNamespace
+from scripts.graph_helper import merge_similar
 
 class GraphBuilder:
     def __init__(self, recorder=None, graph_path="graph.json"):
@@ -18,39 +20,7 @@ class GraphBuilder:
         self.recorder = recorder
         self.graph_path = Path(graph_path)
         self.last_2d_frame = None
-
-    def _figure_to_bgr(self):
-        fig = plt.gcf()
-        fig.canvas.draw()
-        rgba = np.asarray(fig.canvas.buffer_rgba())
-        rgb = rgba[:, :, :3]
-        return rgb[:, :, ::-1].copy()
-
-    def write_2d_graph_frame(self):
-        if self.recorder is None:
-            return
-
-        self.recorder.write(self.get_2d_graph_frame())
-
-    def get_2d_graph_frame(self):
-        if self.last_2d_frame is None:
-            self.draw_2d_graph()
-
-        return self.last_2d_frame
-
-    def clear_recorder(self):
-        self.recorder = None
-
-    def build_graph(self, nodes):
-        self.G.clear()
-        self.pos = None
-
-        for node in nodes:
-            self.G.add_node(node.id, label=node.label, score=node.score)
-
-        for i, a in enumerate(nodes):
-            for b in nodes[i + 1:]:
-                self.G.add_edge(a.id, b.id)
+        self.node_counts = {}
 
     # def update_object(self, obj):
     #     if obj.node_id not in self.G:
@@ -116,24 +86,108 @@ class GraphBuilder:
 
         # final_graph = self._cluster(final_graph)
 
-        # return final_graph
+    #     # return final_graph
 
-    def _strip_embeddings(self, data):
-        if isinstance(data, dict):
-            return {
-                key: self._strip_embeddings(value)
-                for key, value in data.items()
-                if key not in {"txt_embedding", "img_embedding"}
-            }
+    # def _strip_embeddings(self, data):
+    #     if isinstance(data, dict):
+    #         return {
+    #             key: self._strip_embeddings(value)
+    #             for key, value in data.items()
+    #             if key not in {"txt_embedding", "img_embedding"}
+    #         }
 
-        if isinstance(data, list):
-            return [self._strip_embeddings(value) for value in data]
+    #     if isinstance(data, list):
+    #         return [self._strip_embeddings(value) for value in data]
+
+    #     return data
+
+    def _figure_to_bgr(self):
+        fig = plt.gcf()
+        fig.canvas.draw()
+        rgba = np.asarray(fig.canvas.buffer_rgba())
+        rgb = rgba[:, :, :3]
+        return rgb[:, :, ::-1].copy()
+
+    def write_2d_graph_frame(self):
+        if self.recorder is None:
+            return
+
+        self.recorder.write(self.get_2d_graph_frame())
+
+    def get_2d_graph_frame(self):
+        if self.last_2d_frame is None:
+            self.draw_2d_graph()
+
+        return self.last_2d_frame
+
+    def clear_recorder(self):
+        self.recorder = None
+
+    # def build_graph(self, nodes):
+
+    #     for node in nodes:
+    #         self.G.add_node(node.id, label=node.label, score=node.score)
+
+        # for i, a in enumerate(nodes):
+        #     for b in nodes[i + 1:]:
+        #         self.G.add_edge(a.id, b.id)
+    
+    def _next_node_id(self, label):
+        idx = self.node_counts.get(label, 0)
+        self.node_counts[label] = idx + 1
+        return f"{label}_{idx}"
+
+    def _graph_nodes_as_regions(self):
+        return [
+            SimpleNamespace(
+                id=node_id,
+                mask=attrs["mask"],
+                label=attrs["label"],
+                score=attrs["score"],
+            )
+            for node_id, attrs in self.G.nodes(data=True)
+        ]
+
+    def build_graph(self, segmentations):
+        if not segmentations:
+            return list(self.G.nodes)
+
+        nodes = merge_similar(
+            self._graph_nodes_as_regions() + list(segmentations)
+        )
+
+        self.G.clear()
+        for node in nodes:
+            if not node.id:
+                node.id = self._next_node_id(node.label)
+
+            self.G.add_node(
+                node.id,
+                mask=node.mask > 0,
+                label=node.label,
+                score=node.score,
+            )
+
+        graph_nodes = list(self.G.nodes)
+        for i, a in enumerate(graph_nodes):
+            for b in graph_nodes[i + 1:]:
+                self.G.add_edge(a, b)
+
+        return graph_nodes
+
+    @staticmethod
+    def to_serializable_data(graph):
+        data = json_graph.node_link_data(graph)
+        # data = self._strip_embeddings(data)
+        for node in data["nodes"]:
+            node.pop("mask", None)
+            node.pop("txt_embedding", None)
+            node.pop("img_embedding", None)
 
         return data
 
     def save_graph(self, filename=None):
-        data = json_graph.node_link_data(self._build_topology())
-        data = self._strip_embeddings(data)
+        data = self.to_serializable_data(self._build_topology())
 
         graph_path = Path(filename) if filename is not None else self.graph_path
         graph_path.parent.mkdir(parents=True, exist_ok=True)

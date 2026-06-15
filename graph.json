@@ -6,30 +6,46 @@
     {
       "label": "field",
       "score": 30,
+      "id": "field_3"
+    },
+    {
+      "label": "field",
+      "score": 30.0,
       "id": "field_0"
     },
     {
       "label": "field",
-      "score": 30,
+      "score": 30.0,
       "id": "field_1"
     },
     {
       "label": "trees",
-      "score": 0,
+      "score": 0.0,
       "id": "trees_0"
     },
     {
       "label": "field",
-      "score": 30,
+      "score": 30.0,
       "id": "field_2"
-    },
-    {
-      "label": "field",
-      "score": 30,
-      "id": "field_3"
     }
   ],
   "edges": [
+    {
+      "source": "field_3",
+      "target": "field_0"
+    },
+    {
+      "source": "field_3",
+      "target": "field_1"
+    },
+    {
+      "source": "field_3",
+      "target": "trees_0"
+    },
+    {
+      "source": "field_3",
+      "target": "field_2"
+    },
     {
       "source": "field_0",
       "target": "field_1"
@@ -43,10 +59,6 @@
       "target": "field_2"
     },
     {
-      "source": "field_0",
-      "target": "field_3"
-    },
-    {
       "source": "field_1",
       "target": "trees_0"
     },
@@ -55,20 +67,8 @@
       "target": "field_2"
     },
     {
-      "source": "field_1",
-      "target": "field_3"
-    },
-    {
       "source": "trees_0",
       "target": "field_2"
-    },
-    {
-      "source": "trees_0",
-      "target": "field_3"
-    },
-    {
-      "source": "field_2",
-      "target": "field_3"
     }
   ]
 }

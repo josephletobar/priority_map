@@ -6,12 +6,13 @@ MERGE_DIST = 9
 def merge(a, b):
     merged_score = (a.score + b.score) / 2
     merged_label = a.label if a.score >= b.score else b.label
+    merged_id = a.id or b.id
 
     return type(a)(
         mask=np.logical_or(a.mask > 0, b.mask > 0),
         label=merged_label,
         score=merged_score,
-        id=""
+        id=merged_id
     )
 
 def similar(a, b):
@@ -50,4 +51,3 @@ def merge_similar(items):
 
         if not merged:
             return items
-        

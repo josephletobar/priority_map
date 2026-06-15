@@ -9,6 +9,7 @@ from dotenv import load_dotenv
 
 from modules.SceneUnderstanding import SceneUnderstanding
 from modules.Heatmap import Heatmap
+from modules.Segment import Segment
 from modules.GraphBuilder import GraphBuilder
 from modules.GraphChat import ChatWithGraph
 from scripts.video_output import create_video_writer, release_video_writer
@@ -28,6 +29,7 @@ class DroneHeatmap:
         self.index = 0
 
         self.scene_understanding = SceneUnderstanding()
+        self.segmentation = Segment()
         self.graph_builder = GraphBuilder()
         self.heatmap = Heatmap()
         self.video_writer = None
@@ -162,16 +164,20 @@ class DroneHeatmap:
                 scene_dict = self.scene_understanding.get_labels(image, self.task)
             # print(scene_dict)
 
-            heatmap = self.heatmap.get(image, scene_dict)
+            segmentations = self.segmentation.get_segmentations(image, scene_dict)
+
+            curr_nodes = self.graph_builder.build_graph(segmentations)
+
+            heatmap = self.heatmap.draw_heatmap(image, segmentations)
 
             print(f"Frame {frame['frame_index']}:", end=" ")
-            for node in self.heatmap.nodes:
-                print(node.id, end=" ")
+            for node_id in self.graph_builder.G.nodes:
+                print(node_id, end=" ")
             print()
 
             if heatmap is not None: out = heatmap
 
-            self.graph_builder.build_graph(self.heatmap.nodes)
+            # self.graph_builder.build_graph(self.heatmap.nodes)
             self.graph_builder.draw_2d_graph()
 
             self.show_video(out)
