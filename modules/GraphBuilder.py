@@ -8,6 +8,7 @@ from pathlib import Path
 import json
 from types import SimpleNamespace
 from scripts.graph_helper import merge_similar
+from modules.Segment import Segmentation
 
 class GraphBuilder:
     def __init__(self, recorder=None, graph_path="graph.json"):
@@ -68,7 +69,10 @@ class GraphBuilder:
     #     return final_graph
 
     def _build_topology(self):
-        return self.G
+        if self.G.number_of_edges() == 0:
+            return self.G
+
+        return nx.minimum_spanning_tree(self.G, weight="weight")
 
         # Old project logic below expected weighted world-position edges.
         # if len(self.G.nodes()) == 0:
@@ -137,23 +141,33 @@ class GraphBuilder:
         self.node_counts[label] = idx + 1
         return f"{label}_{idx}"
 
-    def _graph_nodes_as_regions(self):
+    def _distance(self, a, b):
+        pos_a = self.G.nodes[a].get("pos")
+        pos_b = self.G.nodes[b].get("pos")
+
+        if pos_a is None or pos_b is None:
+            return float("inf")
+
+        return float(np.linalg.norm(np.array(pos_a) - np.array(pos_b)))
+
+    def _graph_nodes_as_segmentations(self):
         return [
             SimpleNamespace(
                 id=node_id,
                 mask=attrs["mask"],
                 label=attrs["label"],
                 score=attrs["score"],
+                geo_pos=attrs.get("pos"),
             )
             for node_id, attrs in self.G.nodes(data=True)
         ]
 
-    def build_graph(self, segmentations):
+    def build_graph(self, segmentations: list[Segmentation]):
         if not segmentations:
             return list(self.G.nodes)
 
         nodes = merge_similar(
-            self._graph_nodes_as_regions() + list(segmentations)
+            self._graph_nodes_as_segmentations() + list(segmentations)
         )
 
         self.G.clear()
@@ -166,12 +180,13 @@ class GraphBuilder:
                 mask=node.mask > 0,
                 label=node.label,
                 score=node.score,
+                pos=node.geo_pos,
             )
 
         graph_nodes = list(self.G.nodes)
         for i, a in enumerate(graph_nodes):
             for b in graph_nodes[i + 1:]:
-                self.G.add_edge(a, b)
+                self.G.add_edge(a, b, weight=self._distance(a, b))
 
         return graph_nodes
 
@@ -200,10 +215,20 @@ class GraphBuilder:
         plt.clf()
 
         final_graph = self._build_topology()
-        self.pos = nx.spring_layout(final_graph, seed=0)
+        self.pos = {
+            node_id: (attrs["pos"][0], attrs["pos"][1])
+            for node_id, attrs in final_graph.nodes(data=True)
+            if attrs.get("pos") is not None
+        }
 
-        # Old project used weighted edges. Heatmap nodes are simple/unweighted.
-        # edge_labels = nx.get_edge_attributes(final_graph, "weight")
+        missing_pos = [
+            node_id
+            for node_id in final_graph.nodes
+            if node_id not in self.pos
+        ]
+        if missing_pos:
+            fallback_pos = nx.spring_layout(final_graph.subgraph(missing_pos), seed=0)
+            self.pos.update(fallback_pos)
 
         # node_colors = [
         #     final_graph.nodes[n]["cluster"]
@@ -221,11 +246,22 @@ class GraphBuilder:
 
         # nx.draw(final_graph, self.pos, with_labels=True, node_size=1000)
 
-        # nx.draw_networkx_edge_labels(
-        #     final_graph,
-        #     self.pos,
-        #     edge_labels=edge_labels
-        # )
+        for a, b, attrs in final_graph.edges(data=True):
+            weight = attrs.get("weight")
+            if weight is None or not np.isfinite(weight):
+                continue
+
+            x1, y1 = self.pos[a]
+            x2, y2 = self.pos[b]
+            plt.text(
+                (x1 + x2) / 2,
+                (y1 + y2) / 2,
+                f"{weight:.1f}",
+                fontsize=8,
+                ha="center",
+                va="center",
+                bbox={"facecolor": "white", "edgecolor": "none", "alpha": 0.7},
+            )
 
         self.save_graph()
 

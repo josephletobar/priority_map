@@ -6,12 +6,15 @@ import cv2
 import pandas as pd
 import traceback
 from dotenv import load_dotenv
+import numpy as np
 
 from modules.SceneUnderstanding import SceneUnderstanding
 from modules.Heatmap import Heatmap
 from modules.Segment import Segment
 from modules.GraphBuilder import GraphBuilder
 from modules.GraphChat import ChatWithGraph
+from modules.GeoLocalizer import GeoLocalizer
+
 from scripts.video_output import create_video_writer, release_video_writer
 
 load_dotenv()
@@ -32,6 +35,8 @@ class DroneHeatmap:
         self.segmentation = Segment()
         self.graph_builder = GraphBuilder()
         self.heatmap = Heatmap()
+        self.geo_localizer = GeoLocalizer()
+
         self.video_writer = None
         self.video_path = None
 
@@ -149,15 +154,11 @@ class DroneHeatmap:
             image = frame["image"]
             out = image
 
-            gps = (
+            position = (
                 frame["easting"],
-                frame["northing"]
+                frame["northing"],
+                frame["altitude"]
             )
-            # print(
-            #     frame["frame_index"],
-            #     gps,
-            #     frame["altitude"]
-            # )
 
             scene_dict = None
             if self.should_run_sam(frame):
@@ -166,9 +167,18 @@ class DroneHeatmap:
 
             segmentations = self.segmentation.get_segmentations(image, scene_dict)
 
+            for segmentation in segmentations:
+                segmentation.geo_pos = self.geo_localizer.get_location(
+                    image,
+                    segmentation.mask,
+                    position
+                )
+
+                # cv2.imshow("Segmentation", segmentation.mask.astype(np.uint8) * 255)
+
             curr_nodes = self.graph_builder.build_graph(segmentations)
 
-            heatmap = self.heatmap.draw_heatmap(image, segmentations)
+            heatmap = self.heatmap.draw_heatmap(image, segmentations, curr_nodes)
 
             print(f"Frame {frame['frame_index']}:", end=" ")
             for node_id in self.graph_builder.G.nodes:

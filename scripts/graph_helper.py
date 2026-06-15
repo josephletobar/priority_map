@@ -7,12 +7,23 @@ def merge(a, b):
     merged_score = (a.score + b.score) / 2
     merged_label = a.label if a.score >= b.score else b.label
     merged_id = a.id or b.id
+    pos_a = getattr(a, "geo_pos", None)
+    pos_b = getattr(b, "geo_pos", None)
+
+    if pos_a is not None and pos_b is not None:
+        merged_geo_pos = tuple(
+            (float(a_coord) + float(b_coord)) / 2
+            for a_coord, b_coord in zip(pos_a, pos_b)
+        )
+    else:
+        merged_geo_pos = pos_a or pos_b
 
     return type(a)(
         mask=np.logical_or(a.mask > 0, b.mask > 0),
         label=merged_label,
         score=merged_score,
-        id=merged_id
+        id=merged_id,
+        geo_pos=merged_geo_pos
     )
 
 def similar(a, b):

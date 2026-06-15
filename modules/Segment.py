@@ -4,17 +4,18 @@ import cv2
 from dataclasses import dataclass
 
 @dataclass
-class Region:
+class Segmentation:
     mask: np.ndarray
     label: str
     id: str
     score: float   
+    geo_pos: tuple[float, float, float] | None = None
     
 class Segment():
 
     def __init__(self):
 
-        self.regions = []
+        self.segmentations = []
 
         overrides = dict(
             conf=0.5,
@@ -51,9 +52,9 @@ class Segment():
         return map_x, map_y
     
     
-    def _create_region(self, mask: np.ndarray, label, score):
-        self.regions.append(
-            Region(
+    def _create_segmentation(self, mask: np.ndarray, label, score):
+        self.segmentations.append(
+            Segmentation(
                 mask=mask,
                 label=label,
                 score=score,
@@ -68,9 +69,9 @@ class Segment():
 
             map_x, map_y = self._get_flow_map(image)
 
-            for region in self.regions:
-                region.mask = cv2.remap(
-                    region.mask.astype(np.uint8),  # mask being tracked
+            for segmentation in self.segmentations:
+                segmentation.mask = cv2.remap(
+                    segmentation.mask.astype(np.uint8),  # mask being tracked
                     map_x,                         # x-coordinate lookup table from optical flow
                     map_y,                         # y-coordinate lookup table from optical flow
                     interpolation=cv2.INTER_NEAREST,  # preserve binary mask values (0/1)
@@ -97,18 +98,18 @@ class Segment():
             if result.masks is None: return None
             masks = result.masks.data.cpu().numpy()  # (N, H, W)
 
-            self.regions = []
+            self.segmentations = []
             for i in range(len(result.boxes)):
                 prompt = result.names[int(result.boxes.cls[i])]
                 mask = masks[i]
                 score = scene_dict[prompt]["score"]
                 label = scene_dict[prompt]["label"]
 
-                self._create_region(mask, label, score)
+                self._create_segmentation(mask, label, score)
 
                 # annotated = result.plot()
                 # return annotated
 
             # self._create_nodes()
 
-        return self.regions
+        return self.segmentations

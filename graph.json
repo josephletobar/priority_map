@@ -6,69 +6,149 @@
     {
       "label": "field",
       "score": 30,
+      "pos": [
+        498261.859797413,
+        4433461.40218187,
+        530.426907373592
+      ],
       "id": "field_3"
     },
     {
-      "label": "field",
-      "score": 30.0,
-      "id": "field_0"
+      "label": "trees",
+      "score": 0,
+      "pos": [
+        498505.852297296,
+        4433514.15688095,
+        522.092031704262
+      ],
+      "id": "trees_1"
     },
     {
       "label": "field",
-      "score": 30.0,
-      "id": "field_1"
+      "score": 30,
+      "pos": [
+        498630.980393233,
+        4433539.86521399,
+        516.869159488939
+      ],
+      "id": "field_4"
+    },
+    {
+      "label": "field",
+      "score": 30,
+      "pos": [
+        498673.074312092,
+        4433548.60667613,
+        515.462563727051
+      ],
+      "id": "field_5"
+    },
+    {
+      "label": "field",
+      "score": 30,
+      "pos": [
+        498715.345440596,
+        4433557.42560498,
+        514.378867169842
+      ],
+      "id": "field_6"
+    },
+    {
+      "label": "field",
+      "score": 30,
+      "pos": [
+        498757.772333173,
+        4433566.21267302,
+        513.40263481345
+      ],
+      "id": "field_7"
+    },
+    {
+      "label": "trees",
+      "score": 0,
+      "pos": [
+        498757.772333173,
+        4433566.21267302,
+        513.40263481345
+      ],
+      "id": "trees_2"
+    },
+    {
+      "label": "trees",
+      "score": 0,
+      "pos": [
+        498757.772333173,
+        4433566.21267302,
+        513.40263481345
+      ],
+      "id": "trees_3"
     },
     {
       "label": "trees",
       "score": 0.0,
+      "pos": [
+        498796.925862559,
+        4433567.221126804,
+        513.0984511575743
+      ],
       "id": "trees_0"
     },
     {
       "label": "field",
       "score": 30.0,
+      "pos": [
+        498630.604081705,
+        4433477.884232869,
+        513.082236215597
+      ],
       "id": "field_2"
     }
   ],
   "edges": [
     {
+      "weight": 249.769630713036,
       "source": "field_3",
-      "target": "field_0"
+      "target": "trees_1"
     },
     {
-      "source": "field_3",
-      "target": "field_1"
+      "weight": 127.84849304832404,
+      "source": "trees_1",
+      "target": "field_4"
     },
     {
-      "source": "field_3",
+      "weight": 43.01499362870607,
+      "source": "field_4",
+      "target": "field_5"
+    },
+    {
+      "weight": 62.097700593067024,
+      "source": "field_4",
+      "target": "field_2"
+    },
+    {
+      "weight": 43.194863228243165,
+      "source": "field_5",
+      "target": "field_6"
+    },
+    {
+      "weight": 43.338283400265034,
+      "source": "field_6",
+      "target": "field_7"
+    },
+    {
+      "weight": 0.0,
+      "source": "field_7",
+      "target": "trees_2"
+    },
+    {
+      "weight": 0.0,
+      "source": "field_7",
+      "target": "trees_3"
+    },
+    {
+      "weight": 39.167695491445876,
+      "source": "field_7",
       "target": "trees_0"
-    },
-    {
-      "source": "field_3",
-      "target": "field_2"
-    },
-    {
-      "source": "field_0",
-      "target": "field_1"
-    },
-    {
-      "source": "field_0",
-      "target": "trees_0"
-    },
-    {
-      "source": "field_0",
-      "target": "field_2"
-    },
-    {
-      "source": "field_1",
-      "target": "trees_0"
-    },
-    {
-      "source": "field_1",
-      "target": "field_2"
-    },
-    {
-      "source": "trees_0",
-      "target": "field_2"
     }
   ]
 }
