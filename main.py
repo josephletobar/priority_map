@@ -154,8 +154,20 @@ class DroneHeatmap:
 
         return output
 
-    def show_video(self, image, window_name, header):
+    def show_video(self, image, window_name, header, side_image=None, side_header=None):
         image = self._draw_header(image, header)
+
+        if side_image is not None:
+            side_image = self._draw_header(side_image, side_header or header)
+
+            if side_image.shape[0] != image.shape[0]:
+                scale = image.shape[0] / side_image.shape[0]
+                side_image = cv2.resize(
+                    side_image,
+                    (int(side_image.shape[1] * scale), image.shape[0])
+                )
+
+            image = np.hstack([image, side_image])
 
         self._get_video_writer(image, window_name).write(image)
 
@@ -169,15 +181,24 @@ class DroneHeatmap:
 
         mask_frame = np.zeros_like(image)
 
-        mask_frame = self._draw_header(image, f"Mask: {self.mask}")
-
         for segmentation in segmentations:
             if segmentation.label.lower() != self.mask.lower():
                 continue
 
-            mask = segmentation.mask.astype(bool)
-            mask_frame[mask] = image[mask]
-               
+            mask_bool = segmentation.mask.astype(bool)
+            mask_frame[mask_bool] = image[mask_bool]
+
+            mask = segmentation.mask.astype(np.uint8)
+            blurred = cv2.GaussianBlur(mask * 255, (51, 51), 0)
+            alpha = (blurred.astype(np.float32) / 255.0)[..., None]
+
+            feathered = (
+                mask_frame.astype(np.float32) * (1.0 - alpha)
+                + image.astype(np.float32) * alpha
+            ).astype(np.uint8)
+
+            mask_frame[~mask_bool] = feathered[~mask_bool]
+                        
         return mask_frame
 
     def run(self):
@@ -214,13 +235,14 @@ class DroneHeatmap:
                 )
                 # cv2.imshow("Segmentation", segmentation.mask.astype(np.uint8) * 255)
 
+            mask_frame = None
             if self.mask is not None:
+                print(self.mask)
                 mask_frame = self.label_mask(image, segmentations)
-                self.show_video(mask_frame, "Mask Frame", header=f"Mask: {self.mask}")
 
             curr_nodes = self.graph_builder.build_graph(segmentations)
 
-            heatmap = self.heatmap.draw_heatmap(image, segmentations, curr_nodes)
+            heatmap = self.heatmap.draw_heatmap(image, segmentations)
 
             print(f"Frame {frame['frame_index']}:", end=" ")
             for node_id in self.graph_builder.G.nodes:
@@ -232,7 +254,13 @@ class DroneHeatmap:
             # self.graph_builder.build_graph(self.heatmap.nodes)
             self.graph_builder.draw_2d_graph()
 
-            self.show_video(out, "Frame", header=f"Task: {self.task}")
+            self.show_video(
+                out,
+                "Frame",
+                header=f"Task: {self.task}",
+                side_image=mask_frame,
+                side_header=f"Mask: {self.mask}",
+            )
         
 
 if __name__ == "__main__":
