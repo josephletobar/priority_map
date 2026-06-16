@@ -1,6 +1,7 @@
 import os
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 
+import argparse
 from pathlib import Path
 import cv2
 import pandas as pd
@@ -10,7 +11,7 @@ import numpy as np
 
 from modules.SceneUnderstanding import SceneUnderstanding
 from modules.Heatmap import Heatmap
-from modules.Segment import Segment
+from modules.Segment import Segment, Segmentation
 from modules.GraphBuilder import GraphBuilder
 from modules.GraphChat import ChatWithGraph
 from modules.GeoLocalizer import GeoLocalizer
@@ -19,10 +20,27 @@ from scripts.video_output import create_video_writer, release_video_writer
 
 load_dotenv()
 
+
+def parse_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--task", default="Find cars")
+    parser.add_argument("--mask", default=None)
+    return parser.parse_args()
+
+
+def output_dir_name(name):
+    cleaned = "".join(
+        char if char.isalnum() or char in ("-", "_") else "_"
+        for char in name.strip()
+    )
+    return cleaned or "Frame"
+
+
 class DroneHeatmap: 
-    def __init__(self, dataset_root: str, task="Find cars", sam_step=15):
+    def __init__(self, dataset_root: str, task="Find cars", mask=None, sam_step=15):
         self.dataset_root = Path(dataset_root)
         self.task = task
+        self.mask = mask
         self.sam_step = sam_step
         
         self.query_csv = pd.read_csv(self.dataset_root / "query.csv")
@@ -37,8 +55,8 @@ class DroneHeatmap:
         self.heatmap = Heatmap()
         self.geo_localizer = GeoLocalizer()
 
-        self.video_writer = None
-        self.video_path = None
+        self.video_writers = {}
+        self.video_paths = {}
 
     def has_next(self) -> bool:
         return self.index < len(self.query_csv)
@@ -82,20 +100,23 @@ class DroneHeatmap:
 
         return None
     
-    def _get_video_writer(self, image):
-        if self.video_writer is not None:
-            return self.video_writer
+    def _get_video_writer(self, image, window_name):
+        if window_name in self.video_writers:
+            return self.video_writers[window_name]
 
-        self.video_writer, self.video_path = create_video_writer(image)
-        return self.video_writer
+        output_dir = Path("examples") / output_dir_name(window_name)
+        video_writer, video_path = create_video_writer(image, output_dir=output_dir)
+        self.video_writers[window_name] = video_writer
+        self.video_paths[window_name] = video_path
+        return video_writer
 
     def close_video(self):
-        release_video_writer(self.video_writer)
-        self.video_writer = None
+        for video_writer in self.video_writers.values():
+            release_video_writer(video_writer)
+        self.video_writers = {}
 
-    def _draw_task_header(self, image):
+    def _draw_header(self, image, text):
         output = image.copy()
-        text = f"Task: {self.task}"
         font = cv2.FONT_HERSHEY_SIMPLEX
         scale = 0.75
         thickness = 2
@@ -133,15 +154,31 @@ class DroneHeatmap:
 
         return output
 
-    def show_video(self, image):
-        image = self._draw_task_header(image)
+    def show_video(self, image, window_name, header):
+        image = self._draw_header(image, header)
 
-        self._get_video_writer(image).write(image)
+        self._get_video_writer(image, window_name).write(image)
 
-        cv2.imshow("Frame", image)
+        cv2.imshow(window_name, image)
 
         if cv2.waitKey(1) & 0xFF == ord("q"):
             return False
+        
+    def label_mask(self, image: np.ndarray, segmentations: list[Segmentation]):
+        if self.mask is None: return None
+
+        mask_frame = np.zeros_like(image)
+
+        mask_frame = self._draw_header(image, f"Mask: {self.mask}")
+
+        for segmentation in segmentations:
+            if segmentation.label.lower() != self.mask.lower():
+                continue
+
+            mask = segmentation.mask.astype(bool)
+            mask_frame[mask] = image[mask]
+               
+        return mask_frame
 
     def run(self):
 
@@ -166,6 +203,8 @@ class DroneHeatmap:
             # print(scene_dict)
 
             segmentations = self.segmentation.get_segmentations(image, scene_dict)
+            if segmentations is None:
+                segmentations = []
 
             for segmentation in segmentations:
                 segmentation.geo_pos = self.geo_localizer.get_location(
@@ -173,8 +212,11 @@ class DroneHeatmap:
                     segmentation.mask,
                     position
                 )
-
                 # cv2.imshow("Segmentation", segmentation.mask.astype(np.uint8) * 255)
+
+            if self.mask is not None:
+                mask_frame = self.label_mask(image, segmentations)
+                self.show_video(mask_frame, "Mask Frame", header=f"Mask: {self.mask}")
 
             curr_nodes = self.graph_builder.build_graph(segmentations)
 
@@ -190,12 +232,17 @@ class DroneHeatmap:
             # self.graph_builder.build_graph(self.heatmap.nodes)
             self.graph_builder.draw_2d_graph()
 
-            self.show_video(out)
+            self.show_video(out, "Frame", header=f"Task: {self.task}")
         
 
 if __name__ == "__main__":
 
-    drone = DroneHeatmap(r"D:\Train\Train")
+    args = parse_args()
+    drone = DroneHeatmap(
+        r"D:\Train\Train",
+        task=args.task,
+        mask=args.mask,
+    )
 
     try:
         while drone.has_next():
@@ -213,5 +260,3 @@ if __name__ == "__main__":
         chat = ChatWithGraph(final_graph)
         while True:
             chat.chat()
-
-

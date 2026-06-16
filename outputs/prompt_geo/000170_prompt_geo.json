@@ -1,0 +1,32 @@
+{
+  "image": "000170.png",
+  "width": 500,
+  "height": 500,
+  "results": {
+    "forest": {
+      "x": 361,
+      "y": 181,
+      "area_pixels": 17526,
+      "bbox": {
+        "x_min": 264,
+        "y_min": 18,
+        "x_max": 498,
+        "y_max": 478
+      },
+      "component_count": 113
+    },
+    "road": {
+      "x": 178,
+      "y": 66,
+      "area_pixels": 1894,
+      "bbox": {
+        "x_min": 149,
+        "y_min": 0,
+        "x_max": 200,
+        "y_max": 137
+      },
+      "component_count": 99
+    }
+  },
+  "note": "This is a lightweight RGB heuristic, not a language-grounded geospatial model. Coordinates are center points of the largest detected region for each prompt."
+}
