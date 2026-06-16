@@ -2,6 +2,7 @@ import os
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 
 import argparse
+import time
 from pathlib import Path
 import cv2
 import pandas as pd
@@ -16,7 +17,11 @@ from modules.GraphBuilder import GraphBuilder
 from modules.GraphChat import ChatWithGraph
 from modules.GeoLocalizer import GeoLocalizer
 
-from scripts.video_output import create_video_writer, release_video_writer
+from scripts.video_helper import (
+    compose_video_frame,
+    get_video_writer,
+    release_video_writer,
+)
 
 load_dotenv()
 
@@ -26,14 +31,6 @@ def parse_args():
     parser.add_argument("--task", default="Find cars")
     parser.add_argument("--mask", default=None)
     return parser.parse_args()
-
-
-def output_dir_name(name):
-    cleaned = "".join(
-        char if char.isalnum() or char in ("-", "_") else "_"
-        for char in name.strip()
-    )
-    return cleaned or "Frame"
 
 
 class DroneHeatmap: 
@@ -48,15 +45,19 @@ class DroneHeatmap:
         self.query_images_dir = (self.dataset_root / "query_images")
 
         self.index = 0
+        self.output_dir = Path("examples") / time.strftime("%Y-%m-%d_%H-%M-%S")
+        self.output_dir.mkdir(parents=True, exist_ok=True)
 
         self.scene_understanding = SceneUnderstanding()
         self.segmentation = Segment()
-        self.graph_builder = GraphBuilder()
+        self.graph_builder = GraphBuilder(
+            graph_path=self.output_dir / "graph.json"
+        )
         self.heatmap = Heatmap()
         self.geo_localizer = GeoLocalizer()
 
-        self.video_writers = {}
-        self.video_paths = {}
+        self.video_writer = None
+        self.video_path = None
 
     def has_next(self) -> bool:
         return self.index < len(self.query_csv)
@@ -100,76 +101,27 @@ class DroneHeatmap:
 
         return None
     
-    def _get_video_writer(self, image, window_name):
-        if window_name in self.video_writers:
-            return self.video_writers[window_name]
-
-        output_dir = Path("examples") / output_dir_name(window_name)
-        video_writer, video_path = create_video_writer(image, output_dir=output_dir)
-        self.video_writers[window_name] = video_writer
-        self.video_paths[window_name] = video_path
-        return video_writer
-
     def close_video(self):
-        for video_writer in self.video_writers.values():
-            release_video_writer(video_writer)
-        self.video_writers = {}
-
-    def _draw_header(self, image, text):
-        output = image.copy()
-        font = cv2.FONT_HERSHEY_SIMPLEX
-        scale = 0.75
-        thickness = 2
-        padding_x = 18
-        padding_y = 12
-
-        (text_width, text_height), baseline = cv2.getTextSize(
-            text,
-            font,
-            scale,
-            thickness
-        )
-
-        header_height = text_height + baseline + padding_y * 2
-        overlay = output.copy()
-        cv2.rectangle(
-            overlay,
-            (0, 0),
-            (output.shape[1], header_height),
-            (0, 0, 0),
-            -1
-        )
-        output = cv2.addWeighted(overlay, 0.45, output, 0.55, 0)
-
-        cv2.putText(
-            output,
-            text,
-            (padding_x, padding_y + text_height),
-            font,
-            scale,
-            (255, 255, 255),
-            thickness,
-            cv2.LINE_AA,
-        )
-
-        return output
+        release_video_writer(self.video_writer)
+        self.video_writer = None
 
     def show_video(self, image, window_name, header, side_image=None, side_header=None):
-        image = self._draw_header(image, header)
+        image = compose_video_frame(
+            image,
+            header,
+            side_image=side_image,
+            side_header=side_header,
+        )
 
-        if side_image is not None:
-            side_image = self._draw_header(side_image, side_header or header)
+        self.video_writer, video_path = get_video_writer(
+            self.video_writer,
+            image,
+            self.output_dir,
+        )
+        if video_path is not None:
+            self.video_path = video_path
 
-            if side_image.shape[0] != image.shape[0]:
-                scale = image.shape[0] / side_image.shape[0]
-                side_image = cv2.resize(
-                    side_image,
-                    (int(side_image.shape[1] * scale), image.shape[0])
-                )
-
-            image = np.hstack([image, side_image])
-
-        self._get_video_writer(image, window_name).write(image)
+        self.video_writer.write(image)
 
         cv2.imshow(window_name, image)
 
