@@ -19,7 +19,7 @@ class LlamaVlmClient:
         prompt: str,
         image_base64: Optional[str] = None,
         temperature: float = 0.2,
-        max_tokens: int = 512,
+        max_tokens: int = 4*1024,
         **extra_settings,
     ) -> str:
         """Sends a text prompt and an optional base64-encoded image to the local VLM server.

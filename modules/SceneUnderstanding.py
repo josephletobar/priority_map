@@ -13,7 +13,8 @@ class SceneUnderstanding:
         self.vocabulary = {}
         self.vocabulary_alpha = 0.25
 
-        self.client = LlamaVlmClient(host="169.254.89.19", port=8600)
+        self.vlm_client = LlamaVlmClient(host="169.254.89.19", port=8600)
+        self.llm_client = LlamaVlmClient(host="169.254.89.19", port=8601)
         # print(help.analyze(prompt="hi"))
 
     def _vocabulary_labels(self):
@@ -81,7 +82,7 @@ class SceneUnderstanding:
         # Stage 1: VLM Perception
 
         observations = self._loads_json_object(
-            self.client.analyze(prompt=VLM_PROMPT, image_base64=image_b64)
+            self.vlm_client.analyze(prompt=VLM_PROMPT, image_base64=image_b64)
         )["observations"]
         
         # response = self.client.responses.create(
@@ -117,7 +118,7 @@ class SceneUnderstanding:
         #     input=reasoning_prompt,
         # )
 
-        response = self.client.analyze(prompt=reasoning_prompt)
+        response = self.llm_client.analyze(prompt=reasoning_prompt)
 
         labels = self._normalize_labels(self._loads_json_object(response))
 
