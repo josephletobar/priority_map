@@ -89,25 +89,20 @@ class ChatWithGraph:
 
         # return top_nodes
 
-    def chat(self):
-
-        prompt = input("\nYou: ")
-
-        if prompt.lower() in ["quit", "exit"]:
-            return
-
+    def ask(self, prompt, graph=None):
+        graph = graph or self.graph
         if RAG: 
             top_nodes = self.rag(prompt)
 
             expanded = set(top_nodes)
             for node in top_nodes:
-                expanded.update(self.graph.neighbors(node))
+                expanded.update(graph.neighbors(node))
 
-            subgraph = self.graph.subgraph(expanded).copy()
+            subgraph = graph.subgraph(expanded).copy()
 
 
         else: # use the whole graph with no rag
-            subgraph = self.graph.copy()
+            subgraph = graph.copy()
 
 
         # in memory json
@@ -149,5 +144,16 @@ class ChatWithGraph:
             """
         )
 
+        return response.output_text
+
+    def chat(self):
+
+        prompt = input("\nYou: ")
+
+        if prompt.lower() in ["quit", "exit"]:
+            return
+
+        response_text = self.ask(prompt)
+
         print("\nAssistant:")
-        print(response.output_text)
+        print(response_text)

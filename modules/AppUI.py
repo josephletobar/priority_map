@@ -41,6 +41,7 @@ class AppUI:
         self.status_label.pack(fill=tk.X)
 
         self.mask_vars = {}
+        self._mask_options_initialized = False
         self.mask_menu_button = tk.Menubutton(
             self.root,
             text="Observed masks",
@@ -69,6 +70,7 @@ class AppUI:
         self._graph_photo = None
         self._running = False
         self._frame_queue = Queue(maxsize=1)
+        self._chat_queue = Queue()
         self._worker = None
         self.root.protocol("WM_DELETE_WINDOW", self.close)
 
@@ -82,9 +84,20 @@ class AppUI:
         self.add_message("You", text)
 
         if self.on_submit is not None:
+            self.status_var.set("Thinking...")
+            Thread(
+                target=self._run_submit,
+                args=(text,),
+                daemon=True,
+            ).start()
+
+    def _run_submit(self, text):
+        try:
             response = self.on_submit(text)
-            if response:
-                self.add_message("System", response)
+        except Exception as exc:
+            response = f"Error: {exc}"
+
+        self._chat_queue.put(response)
 
     def add_message(self, sender, text):
         self.chat_log.configure(state=tk.NORMAL)
@@ -99,7 +112,13 @@ class AppUI:
         if labels == sorted(self.mask_vars):
             return
 
+        old_labels = set(self.mask_vars)
         selected = self.get_selected_masks()
+        if not self._mask_options_initialized:
+            selected = set(labels)
+        else:
+            selected |= set(labels) - old_labels
+
         self.mask_vars = {}
         self.mask_menu.delete(0, tk.END)
 
@@ -112,6 +131,7 @@ class AppUI:
                 command=self._handle_mask_change,
             )
 
+        self._mask_options_initialized = True
         self._handle_mask_change()
 
     def get_selected_masks(self):
@@ -195,6 +215,8 @@ class AppUI:
                 self._frame_queue.put((frame, graph_frame, labels))
 
         def poll_frame():
+            self._poll_chat()
+
             try:
                 frame, graph_frame, labels = self._frame_queue.get_nowait()
             except Empty:
@@ -218,6 +240,17 @@ class AppUI:
         self._worker.start()
         self.root.after(delay_ms, poll_frame)
         self.run()
+
+    def _poll_chat(self):
+        while True:
+            try:
+                response = self._chat_queue.get_nowait()
+            except Empty:
+                break
+
+            if response:
+                self.add_message("System", response)
+            self.status_var.set("Ready")
 
     def run(self):
         self.root.mainloop()

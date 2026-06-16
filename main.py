@@ -54,6 +54,7 @@ class DroneHeatmap:
         self.graph_builder = GraphBuilder(graph_path=self.output_dir / "graph.json")
         self.heatmap = Heatmap()
         self.geo_localizer = GeoLocalizer()
+        self.graph_chat = ChatWithGraph(self.graph_builder.G)
 
         self.masks = {m.lower() for m in mask}
 
@@ -132,6 +133,10 @@ class DroneHeatmap:
 
     def set_masks(self, masks):
         self.masks = {mask.lower() for mask in masks}
+
+    def ask_graph(self, text):
+        graph = self.graph_builder._build_topology().copy()
+        return self.graph_chat.ask(text, graph=graph)
         
     def label_mask(self, image: np.ndarray, segmentations: list[Segmentation]):
         if self.masks is None: return None
@@ -232,7 +237,7 @@ if __name__ == "__main__":
         mask=args.mask,
     )
     ui = AppUI(
-        on_submit=drone.set_mask,
+        on_submit=drone.ask_graph,
         on_mask_change=drone.set_masks,
     )
 
@@ -253,8 +258,4 @@ if __name__ == "__main__":
         drone.close_video()
         ui.close()
 
-        final_graph = drone.graph_builder.draw_3d_graph()
-        
-        chat = ChatWithGraph(final_graph)
-        while True:
-            chat.chat()
+        drone.graph_builder.draw_3d_graph()
