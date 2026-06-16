@@ -7,8 +7,15 @@ import cv2
 
 
 class AppUI:
-    def __init__(self, title="Drone Heatmap", on_submit=None, max_display_size=(1400, 900)):
+    def __init__(
+        self,
+        title="Drone Heatmap",
+        on_submit=None,
+        on_mask_change=None,
+        max_display_size=(1400, 900)
+    ):
         self.on_submit = on_submit
+        self.on_mask_change = on_mask_change
         self.max_display_size = max_display_size
 
         self.root = tk.Tk()
@@ -32,6 +39,16 @@ class AppUI:
             anchor="w"
         )
         self.status_label.pack(fill=tk.X)
+
+        self.mask_vars = {}
+        self.mask_menu_button = tk.Menubutton(
+            self.root,
+            text="Observed masks",
+            relief=tk.RAISED
+        )
+        self.mask_menu = tk.Menu(self.mask_menu_button, tearoff=False)
+        self.mask_menu_button.configure(menu=self.mask_menu)
+        self.mask_menu_button.pack(fill=tk.X)
 
         input_frame = tk.Frame(self.root)
         input_frame.pack(fill=tk.X)
@@ -75,6 +92,42 @@ class AppUI:
         self.chat_log.see(tk.END)
         self.chat_log.configure(state=tk.DISABLED)
         self.root.update_idletasks()
+
+    def set_mask_options(self, labels):
+        labels = sorted({label.lower() for label in labels if label})
+
+        if labels == sorted(self.mask_vars):
+            return
+
+        selected = self.get_selected_masks()
+        self.mask_vars = {}
+        self.mask_menu.delete(0, tk.END)
+
+        for label in labels:
+            var = tk.BooleanVar(value=label in selected)
+            self.mask_vars[label] = var
+            self.mask_menu.add_checkbutton(
+                label=label,
+                variable=var,
+                command=self._handle_mask_change,
+            )
+
+        self._handle_mask_change()
+
+    def get_selected_masks(self):
+        return {
+            label
+            for label, var in self.mask_vars.items()
+            if var.get()
+        }
+
+    def _handle_mask_change(self):
+        selected = self.get_selected_masks()
+        display = ", ".join(sorted(selected)) or "None"
+        self.mask_menu_button.configure(text=f"Observed masks: {display}")
+
+        if self.on_mask_change is not None:
+            self.on_mask_change(selected)
 
     def _fit_display(self, frame):
         max_width, max_height = self.max_display_size
@@ -120,7 +173,10 @@ class AppUI:
         def worker():
             while self._running:
                 result = on_frame()
-                if isinstance(result, tuple):
+                labels = None
+                if isinstance(result, tuple) and len(result) == 3:
+                    frame, graph_frame, labels = result
+                elif isinstance(result, tuple):
                     frame, graph_frame = result
                 else:
                     frame = result
@@ -136,19 +192,22 @@ class AppUI:
                     except Empty:
                         pass
 
-                self._frame_queue.put((frame, graph_frame))
+                self._frame_queue.put((frame, graph_frame, labels))
 
         def poll_frame():
             try:
-                frame, graph_frame = self._frame_queue.get_nowait()
+                frame, graph_frame, labels = self._frame_queue.get_nowait()
             except Empty:
                 frame = None
                 graph_frame = None
+                labels = None
 
             if frame is not None:
                 self.show_frame(frame)
             if graph_frame is not None:
                 self.show_graph(graph_frame)
+            if labels is not None:
+                self.set_mask_options(labels)
 
             if self._running:
                 self.root.after(delay_ms, poll_frame)

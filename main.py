@@ -30,7 +30,7 @@ load_dotenv()
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--task", default="Find cars")
-    parser.add_argument("--mask", default=None)
+    parser.add_argument("--mask", nargs="*", default=[])
     return parser.parse_args()
 
 
@@ -38,7 +38,7 @@ class DroneHeatmap:
     def __init__(self, dataset_root: str, task="Find cars", mask=None, sam_step=15):
         self.dataset_root = Path(dataset_root)
         self.task = task
-        self.mask = mask
+        self.masks = mask
         self.sam_step = sam_step
         
         self.query_csv = pd.read_csv(self.dataset_root / "query.csv")
@@ -54,6 +54,8 @@ class DroneHeatmap:
         self.graph_builder = GraphBuilder(graph_path=self.output_dir / "graph.json")
         self.heatmap = Heatmap()
         self.geo_localizer = GeoLocalizer()
+
+        self.masks = {m.lower() for m in mask}
 
         self.video_writer = None
         self.video_path = None
@@ -126,16 +128,18 @@ class DroneHeatmap:
     
     def set_mask(self, text):
         print(text)
-        self.mask = text
         return f"Received: {text}"
+
+    def set_masks(self, masks):
+        self.masks = {mask.lower() for mask in masks}
         
     def label_mask(self, image: np.ndarray, segmentations: list[Segmentation]):
-        if self.mask is None: return None
+        if self.masks is None: return None
 
         mask_frame = np.zeros_like(image)
 
         for segmentation in segmentations:
-            if segmentation.label.lower() != self.mask.lower():
+            if segmentation.label.lower() not in self.masks:
                 continue
 
             mask_bool = segmentation.mask.astype(bool)
@@ -189,7 +193,7 @@ class DroneHeatmap:
                 # cv2.imshow("Segmentation", segmentation.mask.astype(np.uint8) * 255)
 
             mask_frame = None
-            if self.mask is not None:
+            if self.masks is not None:
                 mask_frame = self.label_mask(image, segmentations)
 
             curr_nodes = self.graph_builder.build_graph(segmentations)
@@ -208,9 +212,13 @@ class DroneHeatmap:
                 out,
                 header=f"Task: {self.task}",
                 side_image=mask_frame,
-                side_header=f"Mask: {self.mask}",
+                side_header=f"Mask(s): {', '.join(sorted(self.masks)) or 'None'}",
             )
-            return video_frame, graph_frame
+            node_labels = {
+                attrs["label"]
+                for _, attrs in self.graph_builder.G.nodes(data=True)
+            }
+            return video_frame, graph_frame, node_labels
 
         return None
         
@@ -223,7 +231,10 @@ if __name__ == "__main__":
         task=args.task,
         mask=args.mask,
     )
-    ui = AppUI(on_submit=drone.set_mask)
+    ui = AppUI(
+        on_submit=drone.set_mask,
+        on_mask_change=drone.set_masks,
+    )
 
     def next_frame():
         if not drone.has_next():
