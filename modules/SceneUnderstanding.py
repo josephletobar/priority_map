@@ -4,6 +4,7 @@ import numpy as np
 import base64
 import json
 from config.prompts import REASONING_PROMPT, VLM_PROMPT
+from modules.llama_request_helper import LlamaVlmClient
 
 class SceneUnderstanding:
     def __init__(self):
@@ -11,6 +12,9 @@ class SceneUnderstanding:
         self.client = OpenAI()
         self.vocabulary = {}
         self.vocabulary_alpha = 0.25
+
+        self.client = LlamaVlmClient(host="169.254.89.19", port=8600)
+        # print(help.analyze(prompt="hi"))
 
     def _vocabulary_labels(self):
         return sorted(self.vocabulary.keys())
@@ -62,7 +66,7 @@ class SceneUnderstanding:
 
     def get_labels(self, image: np.ndarray, task: str):
 
-        return debug()
+        # return debug()
 
         image = cv2.resize(
             image,
@@ -72,32 +76,33 @@ class SceneUnderstanding:
 
         _, buffer = cv2.imencode(".jpg", image)
 
-        image_b64 = base64.b64encode(
-            buffer
-        ).decode("utf-8")
-
+        image_b64 = base64.b64encode(buffer.tobytes()).decode("utf-8")
         
         # Stage 1: VLM Perception
+
+        observations = self._loads_json_object(
+            self.client.analyze(prompt=VLM_PROMPT, image_base64=image_b64)
+        )["observations"]
         
-        response = self.client.responses.create(
-            model="gpt-4.1-mini",
-            input=[
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "input_text",
-                            "text": VLM_PROMPT,
-                        },
-                        {
-                            "type": "input_image",
-                            "image_url": f"data:image/jpeg;base64,{image_b64}",
-                        },
-                    ],
-                }
-            ],
-        )
-        observations = self._loads_json_object(response.output_text)["observations"]
+        # response = self.client.responses.create(
+        #     model="gpt-4.1-mini",
+        #     input=[
+        #         {
+        #             "role": "user",
+        #             "content": [
+        #                 {
+        #                     "type": "input_text",
+        #                     "text": VLM_PROMPT,
+        #                 },
+        #                 {
+        #                     "type": "input_image",
+        #                     "image_url": f"data:image/jpeg;base64,{image_b64}",
+        #                 },
+        #             ],
+        #         }
+        #     ],
+        # )
+        # observations = self._loads_json_object(response.output_text)["observations"]
 
         # Stage 2: Instruction / Reasoning Model
 
@@ -107,14 +112,14 @@ class SceneUnderstanding:
             vocabulary=json.dumps(self._vocabulary_labels(), indent=2),
         )
 
-        response = self.client.responses.create(
-            model="o4-mini",
-            input=reasoning_prompt,
-        )
+        # response = self.client.responses.create(
+        #     model="o4-mini",
+        #     input=reasoning_prompt,
+        # )
 
-        labels = self._normalize_labels(
-            self._loads_json_object(response.output_text)
-        )
+        response = self.client.analyze(prompt=reasoning_prompt)
+
+        labels = self._normalize_labels(self._loads_json_object(response))
 
         self._update_vocabulary(labels)
 

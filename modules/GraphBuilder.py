@@ -1,6 +1,6 @@
 import numpy as np
 import matplotlib
-matplotlib.use("TkAgg")
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import networkx as nx
 from networkx.readwrite import json_graph
@@ -12,10 +12,6 @@ from modules.Segment import Segmentation
 
 class GraphBuilder:
     def __init__(self, recorder=None, graph_path="graph.json"):
-        
-        self.fig = plt.figure()
-        self.ax = self.fig.add_subplot(111, projection="3d")
-
         self.G = nx.Graph()
         self.pos = {}
         self.recorder = recorder
@@ -210,11 +206,10 @@ class GraphBuilder:
         with graph_path.open("w") as f:
             json.dump(data, f, indent=2)
 
-    def draw_2d_graph(self):
-
-        plt.clf()
-
+    def render_2d_graph_frame(self):
         final_graph = self._build_topology()
+        fig, ax = plt.subplots()
+
         self.pos = {
             node_id: (attrs["pos"][0], attrs["pos"][1])
             for node_id, attrs in final_graph.nodes(data=True)
@@ -238,6 +233,7 @@ class GraphBuilder:
         nx.draw(
             final_graph,
             self.pos,
+            ax=ax,
             with_labels=True,
             node_size=1000,
             # node_color=node_colors,
@@ -253,7 +249,7 @@ class GraphBuilder:
 
             x1, y1 = self.pos[a]
             x2, y2 = self.pos[b]
-            plt.text(
+            ax.text(
                 (x1 + x2) / 2,
                 (y1 + y2) / 2,
                 f"{weight:.1f}",
@@ -264,13 +260,21 @@ class GraphBuilder:
             )
 
         self.save_graph()
+        fig.canvas.draw()
+        rgba = np.asarray(fig.canvas.buffer_rgba())
+        rgb = rgba[:, :, :3]
+        self.last_2d_frame = rgb[:, :, ::-1].copy()
+        plt.close(fig)
 
-        plt.draw()
-        self.last_2d_frame = self._figure_to_bgr()
+        return self.last_2d_frame
 
-        plt.pause(0.1)
+    def draw_2d_graph(self):
+        self.render_2d_graph_frame()
+        plt.imshow(self.last_2d_frame[:, :, ::-1])
+        plt.axis("off")
+        plt.show(block=False)
 
-        return final_graph
+        return self._build_topology()
     
     def draw_3d_graph(self):
         return self.draw_2d_graph()

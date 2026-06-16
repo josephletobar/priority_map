@@ -16,6 +16,7 @@ from modules.Segment import Segment, Segmentation
 from modules.GraphBuilder import GraphBuilder
 from modules.GraphChat import ChatWithGraph
 from modules.GeoLocalizer import GeoLocalizer
+from modules.AppUI import AppUI
 
 from scripts.video_helper import (
     compose_video_frame,
@@ -50,9 +51,7 @@ class DroneHeatmap:
 
         self.scene_understanding = SceneUnderstanding()
         self.segmentation = Segment()
-        self.graph_builder = GraphBuilder(
-            graph_path=self.output_dir / "graph.json"
-        )
+        self.graph_builder = GraphBuilder(graph_path=self.output_dir / "graph.json")
         self.heatmap = Heatmap()
         self.geo_localizer = GeoLocalizer()
 
@@ -105,7 +104,7 @@ class DroneHeatmap:
         release_video_writer(self.video_writer)
         self.video_writer = None
 
-    def show_video(self, image, window_name, header, side_image=None, side_header=None):
+    def show_video(self, image, header, side_image=None, side_header=None):
         image = compose_video_frame(
             image,
             header,
@@ -123,10 +122,12 @@ class DroneHeatmap:
 
         self.video_writer.write(image)
 
-        cv2.imshow(window_name, image)
-
-        if cv2.waitKey(1) & 0xFF == ord("q"):
-            return False
+        return image
+    
+    def set_mask(self, text):
+        print(text)
+        self.mask = text
+        return f"Received: {text}"
         
     def label_mask(self, image: np.ndarray, segmentations: list[Segmentation]):
         if self.mask is None: return None
@@ -189,30 +190,29 @@ class DroneHeatmap:
 
             mask_frame = None
             if self.mask is not None:
-                print(self.mask)
                 mask_frame = self.label_mask(image, segmentations)
 
             curr_nodes = self.graph_builder.build_graph(segmentations)
+            graph_frame = self.graph_builder.render_2d_graph_frame()
 
             heatmap = self.heatmap.draw_heatmap(image, segmentations)
 
-            print(f"Frame {frame['frame_index']}:", end=" ")
-            for node_id in self.graph_builder.G.nodes:
-                print(node_id, end=" ")
-            print()
+            # print(f"Frame {frame['frame_index']}:", end=" ")
+            # for node_id in self.graph_builder.G.nodes:
+            #     print(node_id, end=" ")
+            # print()
 
             if heatmap is not None: out = heatmap
 
-            # self.graph_builder.build_graph(self.heatmap.nodes)
-            self.graph_builder.draw_2d_graph()
-
-            self.show_video(
+            video_frame = self.show_video(
                 out,
-                "Frame",
                 header=f"Task: {self.task}",
                 side_image=mask_frame,
                 side_header=f"Mask: {self.mask}",
             )
+            return video_frame, graph_frame
+
+        return None
         
 
 if __name__ == "__main__":
@@ -223,17 +223,24 @@ if __name__ == "__main__":
         task=args.task,
         mask=args.mask,
     )
+    ui = AppUI(on_submit=drone.set_mask)
+
+    def next_frame():
+        if not drone.has_next():
+            ui.stop()
+            return None
+
+        return drone.run()
 
     try:
-        while drone.has_next():
-            drone.run()
+        ui.run_frame_loop(next_frame)
 
     except Exception:
         traceback.print_exc()
 
     finally:
         drone.close_video()
-        cv2.destroyAllWindows()
+        ui.close()
 
         final_graph = drone.graph_builder.draw_3d_graph()
         
