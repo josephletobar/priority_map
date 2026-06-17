@@ -3,6 +3,8 @@ from ultralytics.models.sam import SAM3SemanticPredictor
 import cv2
 from dataclasses import dataclass
 
+FLOW_SCALE = 0.25
+
 @dataclass
 class Segmentation:
     mask: np.ndarray
@@ -29,7 +31,7 @@ class Segment():
 
         self.dis = cv2.DISOpticalFlow_create(cv2.DISOPTICAL_FLOW_PRESET_MEDIUM)
         self.prev_gray = None
-
+        self.idx = 0
 
     def _parse_dict(self, scene_dict):
         prompts = list(scene_dict.keys())
@@ -38,14 +40,25 @@ class Segment():
 
     def _get_flow_map(self, curr_image):
         curr_gray = cv2.cvtColor(curr_image, cv2.COLOR_BGR2GRAY)
+        h, w = curr_gray.shape[:2]
+        flow_size = (
+            max(1, int(w * FLOW_SCALE)),
+            max(1, int(h * FLOW_SCALE)),
+        )
 
-        flow = self.dis.calc(self.prev_gray, curr_gray, None)
+        curr_gray = cv2.resize(curr_gray, flow_size, interpolation=cv2.INTER_AREA)
+        prev_gray = cv2.resize(self.prev_gray, flow_size, interpolation=cv2.INTER_AREA)
 
-        h, w = curr_image.shape[:2]
+        flow = self.dis.calc(curr_gray, prev_gray, None)
+
+        flow = cv2.resize(flow, (w, h), interpolation=cv2.INTER_LINEAR)
+        flow[..., 0] /= FLOW_SCALE
+        flow[..., 1] /= FLOW_SCALE
+
         x, y = np.meshgrid(np.arange(w), np.arange(h))
 
-        map_x = (x - flow[..., 0]).astype(np.float32)
-        map_y = (y - flow[..., 1]).astype(np.float32)
+        map_x = (x + flow[..., 0]).astype(np.float32)
+        map_y = (y + flow[..., 1]).astype(np.float32)
 
         self.prev_gray = curr_gray
 
@@ -72,8 +85,8 @@ class Segment():
             for segmentation in self.segmentations:
                 segmentation.mask = cv2.remap(
                     segmentation.mask.astype(np.uint8),  # mask being tracked
-                    map_x,                         # x-coordinate lookup table from optical flow
-                    map_y,                         # y-coordinate lookup table from optical flow
+                    map_x,                            # x-coordinate lookup table from optical flow
+                    map_y,                            # y-coordinate lookup table from optical flow
                     interpolation=cv2.INTER_NEAREST,  # preserve binary mask values (0/1)
                     borderMode=cv2.BORDER_CONSTANT,   # pixels outside image become a constant value
                     borderValue=0                    # outside-image pixels become background
@@ -82,6 +95,7 @@ class Segment():
 
         else: # SAM step
             self.prev_gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+            self.idx = 0
 
             if scene_dict is None:
                 return None
@@ -111,5 +125,6 @@ class Segment():
                 # return annotated
 
             # self._create_nodes()
+
 
         return self.segmentations
