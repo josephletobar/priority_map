@@ -1,9 +1,51 @@
 import tkinter as tk
 from tkinter.scrolledtext import ScrolledText
+import ctypes
+from ctypes import wintypes
 from queue import Empty, Queue
 from threading import Thread
 
 import cv2
+import numpy as np
+
+
+user32 = ctypes.windll.user32
+gdi32 = ctypes.windll.gdi32
+
+PW_RENDERFULLCONTENT = 0x00000002
+SRCCOPY = 0x00CC0020
+
+
+class RECT(ctypes.Structure):
+    _fields_ = [
+        ("left", ctypes.c_long),
+        ("top", ctypes.c_long),
+        ("right", ctypes.c_long),
+        ("bottom", ctypes.c_long),
+    ]
+
+
+class BITMAPINFOHEADER(ctypes.Structure):
+    _fields_ = [
+        ("biSize", wintypes.DWORD),
+        ("biWidth", wintypes.LONG),
+        ("biHeight", wintypes.LONG),
+        ("biPlanes", wintypes.WORD),
+        ("biBitCount", wintypes.WORD),
+        ("biCompression", wintypes.DWORD),
+        ("biSizeImage", wintypes.DWORD),
+        ("biXPelsPerMeter", wintypes.LONG),
+        ("biYPelsPerMeter", wintypes.LONG),
+        ("biClrUsed", wintypes.DWORD),
+        ("biClrImportant", wintypes.DWORD),
+    ]
+
+
+class BITMAPINFO(ctypes.Structure):
+    _fields_ = [
+        ("bmiHeader", BITMAPINFOHEADER),
+        ("bmiColors", wintypes.DWORD * 3),
+    ]
 
 
 class AppUI:
@@ -72,6 +114,10 @@ class AppUI:
         self._frame_queue = Queue(maxsize=1)
         self._chat_queue = Queue()
         self._worker = None
+        self._ui_recorder = None
+        self._ui_recording_path = None
+        self._graph_recorder = None
+        self._graph_recording_path = None
         self.root.protocol("WM_DELETE_WINDOW", self.close)
 
     def _handle_submit(self, event=None):
@@ -183,6 +229,104 @@ class AppUI:
     def show_graph(self, frame):
         self._show_image(self.graph_label, "_graph_photo", frame)
 
+    def start_ui_recording(self, output_path, fps=30):
+        self._ui_recording_path = output_path
+        self._ui_recording_fps = fps
+
+    def start_graph_recording(self, output_path, fps=30):
+        self._graph_recording_path = output_path
+        self._graph_recording_fps = fps
+
+    def _capture_window(self, window):
+        hwnd = window.winfo_id()
+        rect = RECT()
+
+        if not user32.GetWindowRect(hwnd, ctypes.byref(rect)):
+            return None
+
+        width = rect.right - rect.left
+        height = rect.bottom - rect.top
+        if width <= 1 or height <= 1:
+            return None
+
+        window_dc = user32.GetWindowDC(hwnd)
+        memory_dc = gdi32.CreateCompatibleDC(window_dc)
+        bitmap = gdi32.CreateCompatibleBitmap(window_dc, width, height)
+        old_bitmap = gdi32.SelectObject(memory_dc, bitmap)
+
+        try:
+            ok = user32.PrintWindow(hwnd, memory_dc, PW_RENDERFULLCONTENT)
+            if not ok:
+                gdi32.BitBlt(memory_dc, 0, 0, width, height, window_dc, 0, 0, SRCCOPY)
+
+            bitmap_info = BITMAPINFO()
+            bitmap_info.bmiHeader.biSize = ctypes.sizeof(BITMAPINFOHEADER)
+            bitmap_info.bmiHeader.biWidth = width
+            bitmap_info.bmiHeader.biHeight = -height
+            bitmap_info.bmiHeader.biPlanes = 1
+            bitmap_info.bmiHeader.biBitCount = 32
+            bitmap_info.bmiHeader.biCompression = 0
+
+            buffer = np.empty((height, width, 4), dtype=np.uint8)
+            gdi32.GetDIBits(
+                memory_dc,
+                bitmap,
+                0,
+                height,
+                buffer.ctypes.data_as(ctypes.c_void_p),
+                ctypes.byref(bitmap_info),
+                0,
+            )
+
+            return cv2.cvtColor(buffer, cv2.COLOR_BGRA2BGR)
+
+        finally:
+            gdi32.SelectObject(memory_dc, old_bitmap)
+            gdi32.DeleteObject(bitmap)
+            gdi32.DeleteDC(memory_dc)
+            user32.ReleaseDC(hwnd, window_dc)
+
+    def _record_window_frame(self, window, recorder_attr, path_attr, fps_attr):
+        output_path = getattr(self, path_attr)
+        if output_path is None:
+            return
+
+        window.update_idletasks()
+        frame = self._capture_window(window)
+        if frame is None:
+            return
+
+        height, width = frame.shape[:2]
+
+        recorder = getattr(self, recorder_attr)
+        if recorder is None:
+            fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+            recorder = cv2.VideoWriter(
+                str(output_path),
+                fourcc,
+                getattr(self, fps_attr),
+                (width, height),
+            )
+            setattr(self, recorder_attr, recorder)
+
+        recorder.write(frame)
+
+    def _record_ui_frame(self):
+        self._record_window_frame(
+            self.root,
+            "_ui_recorder",
+            "_ui_recording_path",
+            "_ui_recording_fps",
+        )
+
+    def _record_graph_frame(self):
+        self._record_window_frame(
+            self.graph_window,
+            "_graph_recorder",
+            "_graph_recording_path",
+            "_graph_recording_fps",
+        )
+
     def update(self):
         self.root.update_idletasks()
         self.root.update()
@@ -228,8 +372,11 @@ class AppUI:
                 self.show_frame(frame)
             if graph_frame is not None:
                 self.show_graph(graph_frame)
+                self._record_graph_frame()
             if labels is not None:
                 self.set_mask_options(labels)
+            if frame is not None:
+                self._record_ui_frame()
 
             if self._running:
                 self.root.after(delay_ms, poll_frame)
@@ -261,6 +408,12 @@ class AppUI:
 
     def close(self):
         self._running = False
+        if self._ui_recorder is not None:
+            self._ui_recorder.release()
+            self._ui_recorder = None
+        if self._graph_recorder is not None:
+            self._graph_recorder.release()
+            self._graph_recorder = None
         if self.graph_window.winfo_exists():
             self.graph_window.destroy()
         if self.root.winfo_exists():

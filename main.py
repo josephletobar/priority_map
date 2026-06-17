@@ -240,6 +240,8 @@ if __name__ == "__main__":
         on_submit=drone.ask_graph,
         on_mask_change=drone.set_masks,
     )
+    ui.start_ui_recording(drone.output_dir / "ui_demo.mp4")
+    ui.start_graph_recording(drone.output_dir / "graph_demo.mp4")
 
     def next_frame():
         if not drone.has_next():

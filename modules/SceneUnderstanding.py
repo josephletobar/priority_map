@@ -4,7 +4,7 @@ import numpy as np
 import base64
 import json
 from config.prompts import REASONING_PROMPT, VLM_PROMPT
-from modules.llama_request_helper import LlamaVlmClient
+from scripts.llama_request_helper import LlamaVlmClient
 
 class SceneUnderstanding:
     def __init__(self):
