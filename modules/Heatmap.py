@@ -1,18 +1,34 @@
 import numpy as np
 import cv2
 
+HEATMAP_PROCESS_SCALE = 1
+
 class Heatmap:
     def __init__(self):
         self.heat_gamma = 10.0
 
     def _create_heatmap(self, image, regions):
-        heatmap = np.zeros(image.shape[:2], dtype=np.float32)
-        valid = np.zeros(image.shape[:2], dtype=np.float32)
-
         if not regions: return image
 
+        h, w = image.shape[:2]
+        small_size = (
+            max(1, int(w * HEATMAP_PROCESS_SCALE)),
+            max(1, int(h * HEATMAP_PROCESS_SCALE)),
+        )
+        small_image = cv2.resize(
+            image,
+            small_size,
+            interpolation=cv2.INTER_AREA,
+        )
+        heatmap = np.zeros(small_image.shape[:2], dtype=np.float32)
+        valid = np.zeros(small_image.shape[:2], dtype=np.float32)
+
         for region in regions:
-            mask = region.mask.astype(np.float32)
+            mask = cv2.resize(
+                region.mask.astype(np.float32),
+                small_size,
+                interpolation=cv2.INTER_AREA,
+            )
             score = region.score
 
             boosted_score = (score / 100) ** self.heat_gamma
@@ -27,7 +43,10 @@ class Heatmap:
                 mask
             )
 
-        spread = (401, 401)
+        spread_size = max(3, int(401 * HEATMAP_PROCESS_SCALE))
+        if spread_size % 2 == 0:
+            spread_size += 1
+        spread = (spread_size, spread_size)
         sigma = 0
         heatmap = cv2.GaussianBlur(heatmap, spread, sigma)
         valid = cv2.GaussianBlur(valid, spread, sigma)
@@ -40,14 +59,14 @@ class Heatmap:
         heatmap = cv2.applyColorMap(heatmap, cv2.COLORMAP_JET)
 
         output = cv2.addWeighted(
-            image,    # base image
+            small_image,    # base image
             0.6,      # weight of base image
             heatmap,  # heatmap overlay image
             0.4,      # weight of heatmap
             0         # constant brightness offset added to every pixel
         )
 
-        return output
+        return cv2.resize(output, (w, h), interpolation=cv2.INTER_LINEAR)
 
     # def _draw_node_labels(self, image):
     #     output = image.copy()

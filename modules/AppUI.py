@@ -1,51 +1,40 @@
-import tkinter as tk
-from tkinter.scrolledtext import ScrolledText
-import ctypes
-from ctypes import wintypes
 from queue import Empty, Queue
 from threading import Thread
 
 import cv2
 import numpy as np
 
-
-user32 = ctypes.windll.user32
-gdi32 = ctypes.windll.gdi32
-
-PW_RENDERFULLCONTENT = 0x00000002
-SRCCOPY = 0x00CC0020
-
-
-class RECT(ctypes.Structure):
-    _fields_ = [
-        ("left", ctypes.c_long),
-        ("top", ctypes.c_long),
-        ("right", ctypes.c_long),
-        ("bottom", ctypes.c_long),
-    ]
-
-
-class BITMAPINFOHEADER(ctypes.Structure):
-    _fields_ = [
-        ("biSize", wintypes.DWORD),
-        ("biWidth", wintypes.LONG),
-        ("biHeight", wintypes.LONG),
-        ("biPlanes", wintypes.WORD),
-        ("biBitCount", wintypes.WORD),
-        ("biCompression", wintypes.DWORD),
-        ("biSizeImage", wintypes.DWORD),
-        ("biXPelsPerMeter", wintypes.LONG),
-        ("biYPelsPerMeter", wintypes.LONG),
-        ("biClrUsed", wintypes.DWORD),
-        ("biClrImportant", wintypes.DWORD),
-    ]
+try:
+    from PySide6.QtCore import Qt, QTimer
+    from PySide6.QtGui import QAction, QImage, QPixmap
+    from PySide6.QtWidgets import (
+        QApplication,
+        QHBoxLayout,
+        QLabel,
+        QLineEdit,
+        QMainWindow,
+        QMenu,
+        QPushButton,
+        QPlainTextEdit,
+        QVBoxLayout,
+        QWidget,
+    )
+except ImportError as exc:
+    raise ImportError(
+        "AppUI now uses PySide6. Install it with: pip install PySide6"
+    ) from exc
 
 
-class BITMAPINFO(ctypes.Structure):
-    _fields_ = [
-        ("bmiHeader", BITMAPINFOHEADER),
-        ("bmiColors", wintypes.DWORD * 3),
-    ]
+class _Window(QMainWindow):
+    def __init__(self, owner, title):
+        super().__init__()
+        self.owner = owner
+        self.setWindowTitle(title)
+
+    def closeEvent(self, event):
+        if not self.owner._closing:
+            self.owner.close()
+        event.accept()
 
 
 class AppUI:
@@ -54,88 +43,96 @@ class AppUI:
         title="Drone Heatmap",
         on_submit=None,
         on_mask_change=None,
-        max_display_size=(1400, 900)
+        max_display_size=(1400, 900),
     ):
         self.on_submit = on_submit
         self.on_mask_change = on_mask_change
         self.max_display_size = max_display_size
 
-        self.root = tk.Tk()
-        self.root.title(title)
+        self.app = QApplication.instance() or QApplication([])
+        self._closing = False
 
-        self.graph_window = tk.Toplevel(self.root)
-        self.graph_window.title("Graph")
-        self.graph_label = tk.Label(self.graph_window, bg="black")
-        self.graph_label.pack(fill=tk.BOTH, expand=True)
+        self.root = _Window(self, title)
+        self.graph_window = _Window(self, "Graph")
 
-        self.image_label = tk.Label(self.root, bg="black")
-        self.image_label.pack(fill=tk.BOTH, expand=True)
+        self.image_label = QLabel()
+        self.image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.image_label.setStyleSheet("background: black;")
+        self.image_label.setMinimumSize(640, 360)
 
-        self.chat_log = ScrolledText(self.root, height=8, state=tk.DISABLED)
-        self.chat_log.pack(fill=tk.BOTH, expand=False)
+        self.graph_label = QLabel()
+        self.graph_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.graph_label.setStyleSheet("background: black;")
+        self.graph_label.setMinimumSize(480, 360)
 
-        self.status_var = tk.StringVar(value="Ready")
-        self.status_label = tk.Label(
-            self.root,
-            textvariable=self.status_var,
-            anchor="w"
-        )
-        self.status_label.pack(fill=tk.X)
+        self.chat_log = QPlainTextEdit()
+        self.chat_log.setReadOnly(True)
+        self.chat_log.setMaximumBlockCount(1000)
+        self.chat_log.setFixedHeight(150)
+
+        self.status_label = QLabel("Ready")
 
         self.mask_vars = {}
         self._mask_options_initialized = False
-        self.mask_menu_button = tk.Menubutton(
-            self.root,
-            text="Observed masks",
-            relief=tk.RAISED
-        )
-        self.mask_menu = tk.Menu(self.mask_menu_button, tearoff=False)
-        self.mask_menu_button.configure(menu=self.mask_menu)
-        self.mask_menu_button.pack(fill=tk.X)
+        self.mask_menu_button = QPushButton("Observed masks")
+        self.mask_menu = QMenu(self.mask_menu_button)
+        self.mask_menu_button.setMenu(self.mask_menu)
 
-        input_frame = tk.Frame(self.root)
-        input_frame.pack(fill=tk.X)
+        self.input_box = QLineEdit()
+        self.input_box.returnPressed.connect(self._handle_submit)
+        self.send_button = QPushButton("Send")
+        self.send_button.clicked.connect(self._handle_submit)
 
-        self.input_var = tk.StringVar()
-        self.input_box = tk.Entry(input_frame, textvariable=self.input_var)
-        self.input_box.pack(side=tk.LEFT, fill=tk.X, expand=True)
-        self.input_box.bind("<Return>", self._handle_submit)
+        input_layout = QHBoxLayout()
+        input_layout.addWidget(self.input_box, 1)
+        input_layout.addWidget(self.send_button)
 
-        self.send_button = tk.Button(
-            input_frame,
-            text="Send",
-            command=self._handle_submit
-        )
-        self.send_button.pack(side=tk.RIGHT)
+        layout = QVBoxLayout()
+        layout.addWidget(self.image_label, 1)
+        layout.addWidget(self.chat_log)
+        layout.addWidget(self.status_label)
+        layout.addWidget(self.mask_menu_button)
+        layout.addLayout(input_layout)
 
-        self._photo = None
-        self._graph_photo = None
+        root_widget = QWidget()
+        root_widget.setLayout(layout)
+        self.root.setCentralWidget(root_widget)
+
+        graph_layout = QVBoxLayout()
+        graph_layout.addWidget(self.graph_label, 1)
+        graph_widget = QWidget()
+        graph_widget.setLayout(graph_layout)
+        self.graph_window.setCentralWidget(graph_widget)
+
         self._running = False
         self._frame_queue = Queue(maxsize=1)
         self._chat_queue = Queue()
         self._worker = None
+        self._poll_timer = QTimer()
+        self._poll_timer.timeout.connect(self._poll_frame)
+
         self._ui_recorder = None
         self._ui_recording_path = None
         self._graph_recorder = None
         self._graph_recording_path = None
-        self.root.protocol("WM_DELETE_WINDOW", self.close)
 
-    def _handle_submit(self, event=None):
-        text = self.input_var.get().strip()
+        self.root.resize(1400, 950)
+        self.graph_window.resize(700, 520)
+        self.root.show()
+        self.graph_window.show()
+
+    def _handle_submit(self):
+        text = self.input_box.text().strip()
         if not text:
             return
 
-        self.status_var.set(f"Submitted: {text}")
-        self.input_var.set("")
+        self.status_label.setText(f"Submitted: {text}")
+        self.input_box.clear()
         self.add_message("You", text)
 
         if self.on_submit is not None:
-            self.status_var.set("Thinking...")
-            Thread(
-                target=self._run_submit,
-                args=(text,),
-                daemon=True,
-            ).start()
+            self.status_label.setText("Thinking...")
+            Thread(target=self._run_submit, args=(text,), daemon=True).start()
 
     def _run_submit(self, text):
         try:
@@ -146,11 +143,11 @@ class AppUI:
         self._chat_queue.put(response)
 
     def add_message(self, sender, text):
-        self.chat_log.configure(state=tk.NORMAL)
-        self.chat_log.insert(tk.END, f"{sender}: {text}\n")
-        self.chat_log.see(tk.END)
-        self.chat_log.configure(state=tk.DISABLED)
-        self.root.update_idletasks()
+        self.chat_log.appendPlainText(f"{sender}: {text}")
+        self.chat_log.verticalScrollBar().setValue(
+            self.chat_log.verticalScrollBar().maximum()
+        )
+        self.app.processEvents()
 
     def set_mask_options(self, labels):
         labels = sorted({label.lower() for label in labels if label})
@@ -166,16 +163,15 @@ class AppUI:
             selected |= set(labels) - old_labels
 
         self.mask_vars = {}
-        self.mask_menu.delete(0, tk.END)
+        self.mask_menu.clear()
 
         for label in labels:
-            var = tk.BooleanVar(value=label in selected)
-            self.mask_vars[label] = var
-            self.mask_menu.add_checkbutton(
-                label=label,
-                variable=var,
-                command=self._handle_mask_change,
-            )
+            action = QAction(label, self.mask_menu)
+            action.setCheckable(True)
+            action.setChecked(label in selected)
+            action.triggered.connect(lambda checked=False: self._handle_mask_change())
+            self.mask_vars[label] = action
+            self.mask_menu.addAction(action)
 
         self._mask_options_initialized = True
         self._handle_mask_change()
@@ -183,14 +179,14 @@ class AppUI:
     def get_selected_masks(self):
         return {
             label
-            for label, var in self.mask_vars.items()
-            if var.get()
+            for label, action in self.mask_vars.items()
+            if action.isChecked()
         }
 
     def _handle_mask_change(self):
         selected = self.get_selected_masks()
         display = ", ".join(sorted(selected)) or "None"
-        self.mask_menu_button.configure(text=f"Observed masks: {display}")
+        self.mask_menu_button.setText(f"Observed masks: {display}")
 
         if self.on_mask_change is not None:
             self.on_mask_change(selected)
@@ -209,24 +205,31 @@ class AppUI:
             interpolation=cv2.INTER_AREA,
         )
 
-    def _show_image(self, label, photo_attr, frame):
+    def _frame_to_pixmap(self, frame):
+        frame = self._fit_display(frame)
+        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        height, width = rgb.shape[:2]
+        bytes_per_line = width * 3
+        image = QImage(
+            rgb.data,
+            width,
+            height,
+            bytes_per_line,
+            QImage.Format.Format_RGB888,
+        ).copy()
+        return QPixmap.fromImage(image)
+
+    def _show_image(self, label, frame):
         if frame is None:
             return
 
-        frame = self._fit_display(frame)
-        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        height, width = frame.shape[:2]
-        data = b"P6\n%d %d\n255\n" % (width, height) + frame.tobytes()
-
-        photo = tk.PhotoImage(master=self.root, data=data, format="PPM")
-        setattr(self, photo_attr, photo)
-        label.configure(image=photo)
+        label.setPixmap(self._frame_to_pixmap(frame))
 
     def show_frame(self, frame):
-        self._show_image(self.image_label, "_photo", frame)
+        self._show_image(self.image_label, frame)
 
     def show_graph(self, frame):
-        self._show_image(self.graph_label, "_graph_photo", frame)
+        self._show_image(self.graph_label, frame)
 
     def start_ui_recording(self, output_path, fps=30):
         self._ui_recording_path = output_path
@@ -237,60 +240,26 @@ class AppUI:
         self._graph_recording_fps = fps
 
     def _capture_window(self, window):
-        hwnd = window.winfo_id()
-        rect = RECT()
+        pixmap = window.grab()
+        image = pixmap.toImage().convertToFormat(QImage.Format.Format_RGBA8888)
+        width = image.width()
+        height = image.height()
 
-        if not user32.GetWindowRect(hwnd, ctypes.byref(rect)):
-            return None
-
-        width = rect.right - rect.left
-        height = rect.bottom - rect.top
-        if width <= 1 or height <= 1:
-            return None
-
-        window_dc = user32.GetWindowDC(hwnd)
-        memory_dc = gdi32.CreateCompatibleDC(window_dc)
-        bitmap = gdi32.CreateCompatibleBitmap(window_dc, width, height)
-        old_bitmap = gdi32.SelectObject(memory_dc, bitmap)
-
-        try:
-            ok = user32.PrintWindow(hwnd, memory_dc, PW_RENDERFULLCONTENT)
-            if not ok:
-                gdi32.BitBlt(memory_dc, 0, 0, width, height, window_dc, 0, 0, SRCCOPY)
-
-            bitmap_info = BITMAPINFO()
-            bitmap_info.bmiHeader.biSize = ctypes.sizeof(BITMAPINFOHEADER)
-            bitmap_info.bmiHeader.biWidth = width
-            bitmap_info.bmiHeader.biHeight = -height
-            bitmap_info.bmiHeader.biPlanes = 1
-            bitmap_info.bmiHeader.biBitCount = 32
-            bitmap_info.bmiHeader.biCompression = 0
-
-            buffer = np.empty((height, width, 4), dtype=np.uint8)
-            gdi32.GetDIBits(
-                memory_dc,
-                bitmap,
-                0,
-                height,
-                buffer.ctypes.data_as(ctypes.c_void_p),
-                ctypes.byref(bitmap_info),
-                0,
-            )
-
-            return cv2.cvtColor(buffer, cv2.COLOR_BGRA2BGR)
-
-        finally:
-            gdi32.SelectObject(memory_dc, old_bitmap)
-            gdi32.DeleteObject(bitmap)
-            gdi32.DeleteDC(memory_dc)
-            user32.ReleaseDC(hwnd, window_dc)
+        ptr = image.bits()
+        if hasattr(ptr, "setsize"):
+            ptr.setsize(image.sizeInBytes())
+        rgba = np.frombuffer(
+            ptr,
+            np.uint8,
+            count=image.sizeInBytes(),
+        ).reshape((height, width, 4)).copy()
+        return cv2.cvtColor(rgba, cv2.COLOR_RGBA2BGR)
 
     def _record_window_frame(self, window, recorder_attr, path_attr, fps_attr):
         output_path = getattr(self, path_attr)
         if output_path is None:
             return
 
-        window.update_idletasks()
         frame = self._capture_window(window)
         if frame is None:
             return
@@ -327,8 +296,7 @@ class AppUI:
         )
 
     def update(self):
-        self.root.update_idletasks()
-        self.root.update()
+        self.app.processEvents()
 
     def run_frame_loop(self, on_frame, delay_ms=30):
         self._running = True
@@ -357,35 +325,34 @@ class AppUI:
 
                 self._frame_queue.put((frame, graph_frame, labels))
 
-        def poll_frame():
-            self._poll_chat()
-
-            try:
-                frame, graph_frame, labels = self._frame_queue.get_nowait()
-            except Empty:
-                frame = None
-                graph_frame = None
-                labels = None
-
-            if frame is not None:
-                self.show_frame(frame)
-            if graph_frame is not None:
-                self.show_graph(graph_frame)
-                self._record_graph_frame()
-            if labels is not None:
-                self.set_mask_options(labels)
-            if frame is not None:
-                self._record_ui_frame()
-
-            if self._running:
-                self.root.after(delay_ms, poll_frame)
-            else:
-                self.root.quit()
-
         self._worker = Thread(target=worker, daemon=True)
         self._worker.start()
-        self.root.after(delay_ms, poll_frame)
+        self._poll_timer.start(delay_ms)
         self.run()
+
+    def _poll_frame(self):
+        self._poll_chat()
+
+        try:
+            frame, graph_frame, labels = self._frame_queue.get_nowait()
+        except Empty:
+            frame = None
+            graph_frame = None
+            labels = None
+
+        if frame is not None:
+            self.show_frame(frame)
+        if graph_frame is not None:
+            self.show_graph(graph_frame)
+            self._record_graph_frame()
+        if labels is not None:
+            self.set_mask_options(labels)
+        if frame is not None:
+            self._record_ui_frame()
+
+        if not self._running:
+            self._poll_timer.stop()
+            self.app.quit()
 
     def _poll_chat(self):
         while True:
@@ -396,24 +363,25 @@ class AppUI:
 
             if response:
                 self.add_message("System", response)
-            self.status_var.set("Ready")
+            self.status_label.setText("Ready")
 
     def run(self):
-        self.root.mainloop()
+        self.app.exec()
 
     def stop(self):
         self._running = False
-        self.root.quit()
+        self.app.quit()
 
     def close(self):
         self._running = False
+        self._closing = True
+        self._poll_timer.stop()
         if self._ui_recorder is not None:
             self._ui_recorder.release()
             self._ui_recorder = None
         if self._graph_recorder is not None:
             self._graph_recorder.release()
             self._graph_recorder = None
-        if self.graph_window.winfo_exists():
-            self.graph_window.destroy()
-        if self.root.winfo_exists():
-            self.root.destroy()
+        self.graph_window.close()
+        self.root.close()
+        self.app.quit()

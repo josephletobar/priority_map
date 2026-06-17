@@ -26,6 +26,8 @@ from scripts.video_helper import (
 
 load_dotenv()
 
+VISUAL_PROCESS_SCALE = .8
+
 
 def parse_args():
     parser = argparse.ArgumentParser()
@@ -141,29 +143,47 @@ class DroneHeatmap:
         return self.graph_chat.ask(text, graph=graph)
         
     def label_mask(self, image: np.ndarray, segmentations: list[Segmentation]):
-        if self.masks is None: return None
+        if not self.masks: return None
 
-        mask_frame = np.zeros_like(image)
+        h, w = image.shape[:2]
+        small_size = (
+            max(1, int(w * VISUAL_PROCESS_SCALE)),
+            max(1, int(h * VISUAL_PROCESS_SCALE)),
+        )
+        small_image = cv2.resize(
+            image,
+            small_size,
+            interpolation=cv2.INTER_AREA,
+        )
+        mask_frame = np.zeros_like(small_image)
+        blur_size = max(3, int(51 * VISUAL_PROCESS_SCALE))
+        if blur_size % 2 == 0:
+            blur_size += 1
 
         for segmentation in segmentations:
             if segmentation.label.lower() not in self.masks:
                 continue
 
-            mask_bool = segmentation.mask.astype(bool)
-            mask_frame[mask_bool] = image[mask_bool]
+            mask = cv2.resize(
+                segmentation.mask.astype(np.uint8),
+                small_size,
+                interpolation=cv2.INTER_NEAREST,
+            )
+            mask_bool = mask.astype(bool)
+            mask_frame[mask_bool] = small_image[mask_bool]
 
-            mask = segmentation.mask.astype(np.uint8)
-            blurred = cv2.GaussianBlur(mask * 255, (51, 51), 0)
-            alpha = (blurred.astype(np.float32) / 255.0)[..., None]
+            # TODO: only blur along the edges (if at all)
+            # blurred = cv2.GaussianBlur(mask * 255, (blur_size, blur_size), 0)
+            # alpha = (blurred.astype(np.float32) / 255.0)[..., None]
 
-            feathered = (
-                mask_frame.astype(np.float32) * (1.0 - alpha)
-                + image.astype(np.float32) * alpha
-            ).astype(np.uint8)
+            # feathered = (
+            #     mask_frame.astype(np.float32) * (1.0 - alpha)
+            #     + small_image.astype(np.float32) * alpha
+            # ).astype(np.uint8)
 
-            mask_frame[~mask_bool] = feathered[~mask_bool]
+            # mask_frame[~mask_bool] = feathered[~mask_bool]
                         
-        return mask_frame
+        return cv2.resize(mask_frame, (w, h), interpolation=cv2.INTER_LINEAR)
 
     def run(self):
 
@@ -200,7 +220,7 @@ class DroneHeatmap:
                 # cv2.imshow("Segmentation", segmentation.mask.astype(np.uint8) * 255)
 
             mask_frame = None
-            if self.masks is not None:
+            if self.masks:
                 mask_frame = self.label_mask(image, segmentations)
 
             # curr_nodes = self.graph_builder.build_graph(segmentations)
