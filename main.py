@@ -31,11 +31,13 @@ def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--task", default="Find cars")
     parser.add_argument("--mask", nargs="*", default=[])
+    parser.add_argument("--record-ui", action="store_true")
+    parser.add_argument("--record-graph", action="store_true")
     return parser.parse_args()
 
 
 class DroneHeatmap: 
-    def __init__(self, dataset_root: str, task="Find cars", mask=None, sam_step=15):
+    def __init__(self, dataset_root: str, task="Find cars", mask=None, sam_step=30):
         self.dataset_root = Path(dataset_root)
         self.task = task
         self.masks = mask
@@ -201,9 +203,10 @@ class DroneHeatmap:
             if self.masks is not None:
                 mask_frame = self.label_mask(image, segmentations)
 
-            curr_nodes = self.graph_builder.build_graph(segmentations)
-            graph_frame = self.graph_builder.render_2d_graph_frame()
-
+            # curr_nodes = self.graph_builder.build_graph(segmentations)
+            # graph_frame = self.graph_builder.render_2d_graph_frame()
+            graph_frame = None
+    
             heatmap = self.heatmap.draw_heatmap(image, segmentations)
 
             # print(f"Frame {frame['frame_index']}:", end=" ")
@@ -219,10 +222,13 @@ class DroneHeatmap:
                 side_image=mask_frame,
                 side_header=f"Mask(s): {', '.join(sorted(self.masks)) or 'None'}",
             )
-            node_labels = {
-                attrs["label"]
-                for _, attrs in self.graph_builder.G.nodes(data=True)
-            }
+            # node_labels = {
+            #     attrs["label"]
+            #     for _, attrs in self.graph_builder.G.nodes(data=True)
+            # }
+
+            node_labels = self.scene_understanding.vocabulary
+
             return video_frame, graph_frame, node_labels
 
         return None
@@ -240,8 +246,10 @@ if __name__ == "__main__":
         on_submit=drone.ask_graph,
         on_mask_change=drone.set_masks,
     )
-    ui.start_ui_recording(drone.output_dir / "ui_demo.mp4")
-    ui.start_graph_recording(drone.output_dir / "graph_demo.mp4")
+    if args.record_ui:
+        ui.start_ui_recording(drone.output_dir / "ui_demo.mp4")
+    if args.record_graph:
+        ui.start_graph_recording(drone.output_dir / "graph_demo.mp4")
 
     def next_frame():
         if not drone.has_next():

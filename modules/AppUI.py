@@ -214,12 +214,11 @@ class AppUI:
             return
 
         frame = self._fit_display(frame)
+        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        height, width = frame.shape[:2]
+        data = b"P6\n%d %d\n255\n" % (width, height) + frame.tobytes()
 
-        ok, buffer = cv2.imencode(".png", frame)
-        if not ok:
-            return
-
-        photo = tk.PhotoImage(master=self.root, data=buffer.tobytes())
+        photo = tk.PhotoImage(master=self.root, data=data, format="PPM")
         setattr(self, photo_attr, photo)
         label.configure(image=photo)
 

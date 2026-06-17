@@ -2,8 +2,9 @@ import numpy as np
 from ultralytics.models.sam import SAM3SemanticPredictor
 import cv2
 from dataclasses import dataclass
+import time 
 
-FLOW_SCALE = 0.25
+FLOW_SCALE = 0.05
 
 @dataclass
 class Segmentation:
@@ -31,7 +32,6 @@ class Segment():
 
         self.dis = cv2.DISOpticalFlow_create(cv2.DISOPTICAL_FLOW_PRESET_MEDIUM)
         self.prev_gray = None
-        self.idx = 0
 
     def _parse_dict(self, scene_dict):
         prompts = list(scene_dict.keys())
@@ -39,6 +39,8 @@ class Segment():
         return prompts
 
     def _get_flow_map(self, curr_image):
+        curr_gray_full = cv2.cvtColor(curr_image, cv2.COLOR_BGR2GRAY)
+
         curr_gray = cv2.cvtColor(curr_image, cv2.COLOR_BGR2GRAY)
         h, w = curr_gray.shape[:2]
         flow_size = (
@@ -49,7 +51,9 @@ class Segment():
         curr_gray = cv2.resize(curr_gray, flow_size, interpolation=cv2.INTER_AREA)
         prev_gray = cv2.resize(self.prev_gray, flow_size, interpolation=cv2.INTER_AREA)
 
+        t0 = time.perf_counter()
         flow = self.dis.calc(curr_gray, prev_gray, None)
+        # print(f"DIS flow: {(time.perf_counter() - t0) * 1000:.2f} ms")
 
         flow = cv2.resize(flow, (w, h), interpolation=cv2.INTER_LINEAR)
         flow[..., 0] /= FLOW_SCALE
@@ -60,7 +64,7 @@ class Segment():
         map_x = (x + flow[..., 0]).astype(np.float32)
         map_y = (y + flow[..., 1]).astype(np.float32)
 
-        self.prev_gray = curr_gray
+        self.prev_gray = curr_gray_full
 
         return map_x, map_y
     
@@ -95,7 +99,6 @@ class Segment():
 
         else: # SAM step
             self.prev_gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-            self.idx = 0
 
             if scene_dict is None:
                 return None

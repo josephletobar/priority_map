@@ -27,7 +27,7 @@ class Heatmap:
                 mask
             )
 
-        spread = (301, 301)
+        spread = (401, 401)
         sigma = 0
         heatmap = cv2.GaussianBlur(heatmap, spread, sigma)
         valid = cv2.GaussianBlur(valid, spread, sigma)

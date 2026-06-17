@@ -66,7 +66,7 @@ class SceneUnderstanding:
 
     def get_labels(self, image: np.ndarray, task: str):
 
-        return debug()
+        return self._debug()
 
         image = cv2.resize(
             image,
@@ -132,30 +132,32 @@ class SceneUnderstanding:
         return labels
         
 
-def debug():
-    return {
-        "dense forest, woodland, tree canopy, or heavily wooded area": {
-            "label": "trees",
-            "score": 0,
-        },
+    def _debug(self):
+        self.vocabulary = {"trees", "field", "road", "building", "vehicle"}
 
-        "open field, grassland, meadow, pasture, lawn": {
-            "label": "field",
-            "score": 30,
-        },
+        return {
+            "dense forest, woodland, tree canopy, or heavily wooded area": {
+                "label": "trees",
+                "score": 0,
+            },
 
-        "road, street, or highway": {
-            "label": "road",
-            "score": 90,
-        },
+            "open field, grassland, meadow, pasture, lawn": {
+                "label": "field",
+                "score": 30,
+            },
 
-        "building, house, facility": {
-            "label": "building",
-            "score": 80,
-        },
+            "road, street, or highway": {
+                "label": "road",
+                "score": 90,
+            },
 
-        "vehicle, car, truck, van, or motorized ground transportation": {
-            "label": "vehicle",
-            "score": 100,
-        },
-    }
+            "building, house, facility": {
+                "label": "building",
+                "score": 80,
+            },
+
+            "vehicle, car, truck, van, or motorized ground transportation": {
+                "label": "vehicle",
+                "score": 100,
+            },
+        }
