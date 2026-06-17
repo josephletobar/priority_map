@@ -1,7 +1,7 @@
 import numpy as np
-from ultralytics.models.sam import SAM3SemanticPredictor
 import cv2
 from dataclasses import dataclass
+from scripts.get_masks import get_masks
 
 @dataclass
 class Segmentation:
@@ -17,24 +17,34 @@ class Segment():
 
         self.segmentations = []
 
-        overrides = dict(
-            conf=0.5,
-            task="segment",
-            mode="predict",
-            model="models/sam3.pt",
-            half=True,  # Use FP16 for faster inference
-            save=False,
-        )
-        self.predictor = SAM3SemanticPredictor(overrides=overrides)
-
         self.dis = cv2.DISOpticalFlow_create(cv2.DISOPTICAL_FLOW_PRESET_MEDIUM)
         self.prev_gray = None
 
+    def _prompt_key(self, prompt):
+        return str(prompt).strip().casefold()
 
     def _parse_dict(self, scene_dict):
-        prompts = list(scene_dict.keys())
+        prompt_info = {}
 
-        return prompts
+        for label, info in scene_dict.items():
+            if not isinstance(info, dict):
+                continue
+
+            prompts = info.get("prompt", [])
+            if isinstance(prompts, str):
+                prompts = [prompts]
+
+            for prompt in prompts:
+                prompt = str(prompt).strip()
+                if not prompt:
+                    continue
+
+                prompt_info[prompt] = {
+                    "label": str(label),
+                    "score": float(info.get("score", 0)),
+                }
+
+        return prompt_info
 
     def _get_flow_map(self, curr_image):
         curr_gray = cv2.cvtColor(curr_image, cv2.COLOR_BGR2GRAY)
@@ -63,6 +73,9 @@ class Segment():
         )
 
     def get_segmentations(self, image, scene_dict):
+
+        print(f"segmenting {scene_dict}")
+
         if scene_dict is None: # Not SAM step
 
             if self.prev_gray is None: return None
@@ -86,30 +99,34 @@ class Segment():
             if scene_dict is None:
                 return None
 
-            prompts = self._parse_dict(scene_dict)
+            prompt_info = self._parse_dict(scene_dict)
+            prompts = list(prompt_info.keys())
+            prompt_lookup = {
+                self._prompt_key(prompt): info
+                for prompt, info in prompt_info.items()
+            }
 
             if len(prompts) < 1:
                 return None
-        
-            results = self.predictor(image, text=prompts)
-            if not results: return None
-            result = results[0]
-
-            if result.masks is None: return None
-            masks = result.masks.data.cpu().numpy()  # (N, H, W)
+            
+            masks_by_prompt = get_masks(image, prompts)
 
             self.segmentations = []
-            for i in range(len(result.boxes)):
-                prompt = result.names[int(result.boxes.cls[i])]
-                mask = masks[i]
-                score = scene_dict[prompt]["score"]
-                label = scene_dict[prompt]["label"]
+            for prompt, masks in masks_by_prompt.items():
+                info = (
+                    prompt_info.get(prompt)
+                    or prompt_lookup.get(self._prompt_key(prompt))
+                )
+                if info is None:
+                    continue
 
-                self._create_segmentation(mask, label, score)
-
-                # annotated = result.plot()
-                # return annotated
-
-            # self._create_nodes()
+                for mask in masks:
+                    self._create_segmentation(
+                        mask,
+                        info["label"],
+                        info["score"],
+                    )
+        
+    
 
         return self.segmentations
