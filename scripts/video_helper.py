@@ -1,7 +1,9 @@
 import cv2
 import numpy as np
 from pathlib import Path
+from modules.Segment import Segmentation
 
+MASK_EDGE_BLUR = 51
 
 def video_path(output_dir="example", filename="video.mp4"):
     output_dir = Path(output_dir)
@@ -99,3 +101,44 @@ def compose_video_frame(image, header, side_image=None, side_header=None):
         image = stack_side_by_side(image, side_image)
 
     return image
+
+def label_mask(masks: list[str], image: np.ndarray, segmentations: list[Segmentation]):
+    if not masks: return None
+
+    mask_frame = np.zeros_like(image)
+    blur_size = MASK_EDGE_BLUR
+    if blur_size % 2 == 0:
+        blur_size += 1
+    pad = blur_size // 2
+
+    for segmentation in segmentations:
+        if segmentation.label.lower() not in masks:
+            continue
+
+        mask = segmentation.mask.astype(np.uint8)
+        x, y, width, height = cv2.boundingRect(mask)
+        if width == 0 or height == 0:
+            continue
+
+        x0 = max(0, x - pad)
+        y0 = max(0, y - pad)
+        x1 = min(image.shape[1], x + width + pad)
+        y1 = min(image.shape[0], y + height + pad)
+
+        mask_roi = mask[y0:y1, x0:x1]
+        image_roi = image[y0:y1, x0:x1]
+        output_roi = mask_frame[y0:y1, x0:x1]
+
+        alpha = cv2.GaussianBlur(mask_roi * 255, (blur_size, blur_size), 0)
+        alpha = (alpha.astype(np.float32) / 255.0)[..., None]
+
+        blended = (
+            output_roi.astype(np.float32) * (1.0 - alpha)
+            + image_roi.astype(np.float32) * alpha
+        ).astype(np.uint8)
+
+        mask_bool = mask_roi.astype(bool)
+        output_roi[:] = blended
+        output_roi[mask_bool] = image_roi[mask_bool]
+                    
+    return mask_frame

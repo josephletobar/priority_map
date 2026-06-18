@@ -10,6 +10,8 @@ import traceback
 from dotenv import load_dotenv
 import numpy as np
 
+from scripts.video_helper import label_mask
+
 from modules.SceneUnderstanding import SceneUnderstanding
 from modules.Heatmap import Heatmap
 from modules.Segment import Segment, Segmentation
@@ -27,7 +29,6 @@ from scripts.video_helper import (
 load_dotenv()
 
 VISUAL_PROCESS_SCALE = .8
-
 
 def parse_args():
     parser = argparse.ArgumentParser()
@@ -141,27 +142,7 @@ class DroneHeatmap:
     def ask_graph(self, text):
         graph = self.graph_builder._build_topology().copy()
         return self.graph_chat.ask(text, graph=graph)
-        
-    def label_mask(self, image: np.ndarray, segmentations: list[Segmentation]):
-        if not self.masks: return None
-
-        mask_frame = np.zeros_like(image)
-
-        for segmentation in segmentations:
-            if segmentation.label.lower() not in self.masks:
-                continue
-
-            mask = segmentation.mask.astype(np.uint8)
-            x, y, width, height = cv2.boundingRect(mask)
-            if width == 0 or height == 0:
-                continue
-
-            mask_roi = mask[y:y + height, x:x + width].astype(bool)
-            image_roi = image[y:y + height, x:x + width]
-            output_roi = mask_frame[y:y + height, x:x + width]
-            output_roi[mask_roi] = image_roi[mask_roi]
-                        
-        return mask_frame
+    
 
     def run(self):
 
@@ -199,7 +180,7 @@ class DroneHeatmap:
 
             mask_frame = None
             if self.masks:
-                mask_frame = self.label_mask(image, segmentations)
+                mask_frame = label_mask(self.masks, image, segmentations)
 
             # curr_nodes = self.graph_builder.build_graph(segmentations)
             # graph_frame = self.graph_builder.render_2d_graph_frame()
