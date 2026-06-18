@@ -34,9 +34,23 @@ class Segment():
         self.prev_gray = None
 
     def _parse_dict(self, scene_dict):
-        prompts = list(scene_dict.keys())
+        prompts = []
+        prompt_to_label = {}
 
-        return prompts
+        for label, label_info in scene_dict.items():
+            label_prompts = label_info.get("prompt", [])
+            if isinstance(label_prompts, str):
+                label_prompts = [label_prompts]
+
+            for prompt in label_prompts:
+                prompt = str(prompt).strip()
+                if not prompt:
+                    continue
+
+                prompts.append(prompt)
+                prompt_to_label[prompt] = label
+
+        return prompts, prompt_to_label
 
     def _get_flow_map(self, curr_image):
         curr_gray_full = cv2.cvtColor(curr_image, cv2.COLOR_BGR2GRAY)
@@ -103,7 +117,7 @@ class Segment():
             if scene_dict is None:
                 return None
 
-            prompts = self._parse_dict(scene_dict)
+            prompts, prompt_to_label = self._parse_dict(scene_dict)
 
             if len(prompts) < 1:
                 return None
@@ -118,9 +132,12 @@ class Segment():
             self.segmentations = []
             for i in range(len(result.boxes)):
                 prompt = result.names[int(result.boxes.cls[i])]
+                if prompt not in prompt_to_label:
+                    continue
+
                 mask = masks[i]
-                score = scene_dict[prompt]["score"]
-                label = scene_dict[prompt]["label"]
+                label = prompt_to_label[prompt]
+                score = scene_dict[label]["score"]
 
                 self._create_segmentation(mask, label, score)
 

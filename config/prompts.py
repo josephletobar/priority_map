@@ -1,109 +1,68 @@
 VLM_PROMPT = """
-Analyze the aerial image.
+Generate labels for open-vocabulary localization from aerial or satellite imagery for the mission objective: {task}
 
-Identify visible terrain, land cover, structures, and objects.
+This is the existing vocabulary: {vocabulary}
 
-Rules:
+Return exactly one JSON object. The top-level value must be an object (not a list/array), must begin with '{{' and end with '}}', and must contain no markdown, code fences, comments, explanations, or extra text.
 
-* Report only things that are clearly visible.
-* Do not infer, guess, or hallucinate objects.
-* Do not describe location, direction, adjacency, boundaries, shape, or spatial relationships.
-* Do not describe size.
-* Use short semantic descriptions.
-* Focus on what is present, not where it is.
-* Merge duplicate observations.
-* Output valid JSON only.
-* Do not include markdown fences, comments, explanations, or extra text.
-* Use double quotes for every JSON key and string value.
-
-Return exactly one JSON object and nothing else.
-
-Format:
-
-{
-"observations": [
-"dense forest",
-"grassy field",
-"dirt road",
-"small building"
-]
-}
-"""
-
-REASONING_PROMPT = """
-Task:
-{task}
-
-Observations:
-{observations}
-
-Existing canonical label vocabulary:
-{vocabulary}
-
-Convert the observations into semantic categories suitable for visual grounding and segmentation.
-
-Requirements:
-
-* The generated prompt will be used as a query for a visual grounding model.
-
-* The grounding model converts the prompt into an embedding and matches it against image regions.
-
-* Create prompts that maximize similarity to the target region while remaining visually distinct from competing categories.
-
-* Use the strongest grounding concept for the category, augmented with a small amount of visual detail when it improves discrimination.
-
-* Stay close to common semantic concepts likely to exist in the grounding model's training data.
-
-* Prefer concise descriptive noun phrases.
-
-* Do not use synonym lists.
-
-* Do not use negations.
-
-* Do not describe location, direction, boundaries, adjacency, size, shape, or spatial relationships.
-
-* Avoid decorative, subjective, or overly specific descriptions.
-
-* Reuse labels from the existing vocabulary when possible.
-
-* Merge equivalent concepts.
-
-* Prefer a small number of highly informative categories over many weak categories.
-
-* Favor precision over recall when selecting categories.
-
-* Assign a relevance score from 0-100 representing the likelihood that the task target would be visually located within that region.
-
-* Consider both direct presence and strong environmental associations with the target.
-
-* Output valid JSON only.
-
-* Return exactly one JSON object and nothing else.
-
-* Do not include markdown fences, comments, explanations, or extra text.
-
-* Use double quotes for every JSON key and string value.
-
-* Every top-level value must be an object with exactly "label" and "score".
-
-Format:
-
+Schema:
 {{
-"forest canopy": {{
-"label": "trees",
-"score": 0
-}},
-"grass field": {{
-"label": "field",
-"score": 30
-}},
-"paved roadway": {{
-"label": "road",
-"score": 90
-}},
-"building rooftop": {{
-"label": "building",
-"score": 20
-}}
+    "trees": {{
+        "prompt": "dense forest, woodland, tree canopy, or heavily wooded area",
+        "score": 0
+    }},
+    "field": {{
+        "prompt": "open field, grassland, meadow, pasture, lawn",
+        "score": 30
+    }},
+    "road": {{
+        "prompt": "road, street, or highway",
+        "score": 90
+    }},
+    "building": {{
+        "prompt": "building, house, facility",
+        "score": 80
+    }},
+    "vehicle": {{
+        "prompt": "vehicle, car, truck, van, or motorized ground transportation",
+        "score": 100
+    }}
 }}
 """
+
+PROMPT_TEMPLATES = [
+    "aerial imagery of {}.",
+    "aerial imagery of {}s.",
+    "an aerial image of {}.",
+    "an aerial image of {}s.",
+    "a satellite image of {}.",
+    "a satellite image of {}s.",
+    "an overhead view of {}.",
+    "an overhead view of {}s.",
+    "{} seen from above.",
+    "{}s seen from above.",
+    "{} in aerial imagery.",
+    "{}s in aerial imagery.",
+    "{} in satellite imagery.",
+    "{}s in satellite imagery.",
+    "there is {} in the aerial scene.",
+    "there are {}s in the aerial scene.",
+]
+
+# Rules:
+# - Labels must correspond to large visually distinct regions.
+# - Include all major visible categories, not just the most important ones.
+# - Do not include parts or subtypes of another label.
+# - Merge semantically similar categories, including if it is already in the vocabulary.
+# - If road, sidewalk, driveway, parking lot, or other traversable paved surfaces are present, output only "road".
+# - If houses or buildings are present, output only "building".
+# - If dense contiguous tree canopy is present, output "forest".
+# - If large open grassy or agricultural areas are present, output "field".
+# - Do not merge forest, field, or vegetation into a single category.
+# - Roads are high-priority categories and should always be included when visible.
+# - For each label, generate localization synonyms as a single '+'-separated string.
+# - The synonyms string must always start with the canonical label itself.
+# - Include a mission relevance score from 0-100.
+# - Relevance reflects mission usefulness, not detection confidence.
+# - Return exactly one JSON object. The top-level value must be an object (not a list/array), must begin with '{{' and end with '}}', and must contain no markdown, code fences, comments, explanations, or extra text.
+
