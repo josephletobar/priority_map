@@ -3,6 +3,7 @@ import cv2
 
 HEATMAP_PROCESS_SCALE = 1
 
+
 class Heatmap:
     def __init__(self):
         self.heat_gamma = 10.0

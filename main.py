@@ -18,7 +18,7 @@ from modules.Segment import Segment, Segmentation
 from modules.GraphBuilder import GraphBuilder
 from modules.GraphChat import ChatWithGraph
 from modules.GeoLocalizer import GeoLocalizer
-# from modules.AppUI import AppUI
+from modules.AppUI import AppUI
 
 from scripts.video_helper import (
     compose_video_frame,
@@ -221,24 +221,30 @@ if __name__ == "__main__":
         task=args.task,
         mask=args.mask,
     )
+    ui = AppUI(
+        on_submit=drone.ask_graph,
+        on_mask_change=drone.set_masks,
+    )
+    if args.record_ui:
+        ui.start_ui_recording(drone.output_dir / "ui_demo.mp4")
+    if args.record_graph:
+        ui.start_graph_recording(drone.output_dir / "graph_demo.mp4")
+
+    def next_frame():
+        if not drone.has_next():
+            ui.stop()
+            return None
+
+        return drone.run()
+
     try:
-        while drone.has_next():
-            result = drone.run()
-            if result is None:
-                break
-
-            video_frame, _, _ = result
-            cv2.imshow("Drone Heatmap", video_frame)
-
-            key = cv2.waitKey(1) & 0xFF
-            if key in (27, ord("q")):
-                break
+        ui.run_frame_loop(next_frame)
 
     except Exception:
         traceback.print_exc()
 
     finally:
         drone.close_video()
-        cv2.destroyAllWindows()
+        ui.close()
 
-        # drone.graph_builder.draw_3d_graph()
+        drone.graph_builder.draw_3d_graph()

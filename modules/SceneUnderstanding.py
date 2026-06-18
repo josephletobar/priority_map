@@ -194,7 +194,7 @@ def debug():
         },
 
         "building": {
-            "prompt": "building, house, facility",
+            "prompt": "rooftop, building, house, facility",
             "score": 80,
         },
 

@@ -3,8 +3,11 @@ from ultralytics.models.sam import SAM3SemanticPredictor
 import cv2
 from dataclasses import dataclass
 import time 
+from config.prompts import PROMPT_TEMPLATES
 
 FLOW_SCALE = 0.05
+
+PROMPT_TEMPLATE = "{prompt} seen from above"
 
 @dataclass
 class Segmentation:
@@ -47,8 +50,9 @@ class Segment():
                 if not prompt:
                     continue
 
-                prompts.append(prompt)
-                prompt_to_label[prompt] = label
+                templated_prompt = PROMPT_TEMPLATE.format(prompt=prompt)
+                prompts.append(templated_prompt)
+                prompt_to_label[templated_prompt] = label
 
         return prompts, prompt_to_label
 
@@ -126,6 +130,10 @@ class Segment():
             if not results: return None
             result = results[0]
 
+            annotated = result.plot()
+            cv2.imshow("SAM3", annotated)
+            cv2.waitKey(1)
+
             if result.masks is None: return None
             masks = result.masks.data.cpu().numpy()  # (N, H, W)
 
@@ -141,8 +149,6 @@ class Segment():
 
                 self._create_segmentation(mask, label, score)
 
-                # annotated = result.plot()
-                # return annotated
 
             # self._create_nodes()
 
