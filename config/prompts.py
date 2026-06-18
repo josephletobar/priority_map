@@ -1,9 +1,25 @@
 VLM_PROMPT = """
-Generate labels for open-vocabulary localization from aerial or satellite imagery for the mission objective: {task}
+Generate labels describing localizable landscape/objects from aerial/satellite imagery
 
-This is the existing vocabulary: {vocabulary}
+Do not hallucinate or infer what may be in the scene. 
 
-Return exactly one JSON object. The top-level value must be an object (not a list/array), must begin with '{{' and end with '}}', and must contain no markdown, code fences, comments, explanations, or extra text.
+Do not explain
+
+Objects must be easily localizable by a segmentation model
+
+For help in object detection, the image is slightly green tinted.
+"""
+
+LLM_PROMPT = """
+These are the observations in the current scene for you to format: {observation}
+
+Format the observations for open-vocabulary localization from aerial or satellite imagery for the following mission objective: {task}
+
+The "score" field should be a relevance score 0-100 of this area/object in achieving the given task.
+
+Here is the existing vocabulary, along with what you outputted for the previous score of this category, so you remain consistent (unless new observation has changed relevance): {vocabulary}
+
+Return exactly one valid JSON object using double-quoted keys/strings and no trailing commas. No markdown or extra text.
 
 Schema:
 {{

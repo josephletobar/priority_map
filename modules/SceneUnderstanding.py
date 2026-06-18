@@ -2,7 +2,8 @@ import cv2
 import numpy as np
 import base64
 import json
-from config.prompts import VLM_PROMPT
+import re
+from config.prompts import VLM_PROMPT, LLM_PROMPT
 from scripts.llama_request_helper import LlamaVlmClient
 from ollama import chat
 import time
@@ -42,8 +43,12 @@ class SceneUnderstanding:
             .strip()
         )
 
+        def parse_json(candidate):
+            candidate = re.sub(r",\s*([}\]])", r"\1", candidate)
+            return json.loads(candidate)
+
         try:
-            obj = json.loads(text)
+            obj = parse_json(text)
         except json.JSONDecodeError:
             start = text.find("{")
             end = text.rfind("}")
@@ -51,7 +56,12 @@ class SceneUnderstanding:
             if start == -1 or end == -1 or end <= start:
                 raise
 
-            obj = json.loads(text[start:end + 1])
+            try:
+                obj = parse_json(text[start:end + 1])
+            except json.JSONDecodeError:
+                print("INVALID VLM JSON:")
+                print(text)
+                raise
 
         if isinstance(obj, list):
             if len(obj) == 1 and isinstance(obj[0], dict):
@@ -105,7 +115,7 @@ class SceneUnderstanding:
 
     def get_labels(self, image: np.ndarray, task: str):
 
-        # return debug()
+        return debug()
 
         image = cv2.resize(
             image,
@@ -116,32 +126,52 @@ class SceneUnderstanding:
         _, buffer = cv2.imencode(".jpg", image)
 
         image_b64 = base64.b64encode(buffer.tobytes()).decode("utf-8")
-        
-        vlm_prompt = VLM_PROMPT.format(
-            task=json.dumps(task, indent=2),
-            vocabulary=json.dumps(self._vocabulary_labels(), indent=2),
-        )
-        
+    
+        # VLM CALL
         start = time.perf_counter()
         response = chat(
             model="qwen2.5vl:3b",
             messages=[
                 {
                     "role": "user",
-                    "content": vlm_prompt,
+                    "content": VLM_PROMPT,
                     "images": [image_b64],
                 }
             ],
         )
         end = time.perf_counter()
-        print(f"\nInference time: {end - start:.2f} seconds")
-
+        print(f"\nVLM inference time: {end - start:.2f} seconds")
         text = response["message"]["content"]
+        print(text)
+
+        # LLM CALL
+        llm_prompt = LLM_PROMPT.format(
+            observation = text,
+            task=json.dumps(task, indent=2),
+            vocabulary=json.dumps(self._vocabulary_labels(), indent=2),
+        )
+        start = time.perf_counter()
+        response = chat(
+            model="qwen2.5vl:3b",
+            messages=[
+                {
+                    "role": "user",
+                    "content": llm_prompt,
+                }
+            ],
+        )
+        end = time.perf_counter()
+        print(f"\nLLM inference time: {end - start:.2f} seconds")
+        text = response["message"]["content"]
+        print(text)
+
         scene_dict = self._normalize_scene_dict(self._loads_json_object(text))
 
         self._update_vocabulary(scene_dict)
+        print(self.vocabulary)
 
-        print(text)
+        # time.sleep(500)
+
 
         return scene_dict
         
