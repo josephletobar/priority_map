@@ -5,8 +5,9 @@ import cv2
 import numpy as np
 
 try:
-    from PySide6.QtCore import Qt, QTimer
-    from PySide6.QtGui import QAction, QImage, QPixmap
+    from PySide6.QtCore import QRectF, QTimer
+    from PySide6.QtGui import QAction, QColor, QImage, QPainter
+    from PySide6.QtOpenGLWidgets import QOpenGLWidget
     from PySide6.QtWidgets import (
         QApplication,
         QHBoxLayout,
@@ -37,17 +38,55 @@ class _Window(QMainWindow):
         event.accept()
 
 
+class _GpuImageWidget(QOpenGLWidget):
+    def __init__(self, min_size):
+        super().__init__()
+        self._image = None
+        self.setMinimumSize(*min_size)
+
+    def set_frame(self, frame):
+        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        height, width = rgb.shape[:2]
+        bytes_per_line = width * 3
+        self._image = QImage(
+            rgb.data,
+            width,
+            height,
+            bytes_per_line,
+            QImage.Format.Format_RGB888,
+        ).copy()
+        self.update()
+
+    def paintGL(self):
+        painter = QPainter(self)
+        painter.fillRect(self.rect(), QColor("black"))
+
+        if self._image is not None:
+            target = self._scaled_target_rect(self._image.width(), self._image.height())
+            painter.drawImage(target, self._image)
+
+        painter.end()
+
+    def _scaled_target_rect(self, image_width, image_height):
+        widget_width = self.width()
+        widget_height = self.height()
+        scale = min(widget_width / image_width, widget_height / image_height)
+        width = image_width * scale
+        height = image_height * scale
+        x = (widget_width - width) / 2
+        y = (widget_height - height) / 2
+        return QRectF(x, y, width, height)
+
+
 class AppUI:
     def __init__(
         self,
         title="Drone Heatmap",
         on_submit=None,
         on_mask_change=None,
-        max_display_size=(1400, 900),
     ):
         self.on_submit = on_submit
         self.on_mask_change = on_mask_change
-        self.max_display_size = max_display_size
 
         self.app = QApplication.instance() or QApplication([])
         self._closing = False
@@ -55,15 +94,8 @@ class AppUI:
         self.root = _Window(self, title)
         self.graph_window = _Window(self, "Graph")
 
-        self.image_label = QLabel()
-        self.image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.image_label.setStyleSheet("background: black;")
-        self.image_label.setMinimumSize(640, 360)
-
-        self.graph_label = QLabel()
-        self.graph_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.graph_label.setStyleSheet("background: black;")
-        self.graph_label.setMinimumSize(480, 360)
+        self.image_label = _GpuImageWidget((640, 360))
+        self.graph_label = _GpuImageWidget((480, 360))
 
         self.chat_log = QPlainTextEdit()
         self.chat_log.setReadOnly(True)
@@ -191,39 +223,11 @@ class AppUI:
         if self.on_mask_change is not None:
             self.on_mask_change(selected)
 
-    def _fit_display(self, frame):
-        max_width, max_height = self.max_display_size
-        height, width = frame.shape[:2]
-        scale = min(max_width / width, max_height / height, 1.0)
-
-        if scale >= 1.0:
-            return frame
-
-        return cv2.resize(
-            frame,
-            (int(width * scale), int(height * scale)),
-            interpolation=cv2.INTER_AREA,
-        )
-
-    def _frame_to_pixmap(self, frame):
-        frame = self._fit_display(frame)
-        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        height, width = rgb.shape[:2]
-        bytes_per_line = width * 3
-        image = QImage(
-            rgb.data,
-            width,
-            height,
-            bytes_per_line,
-            QImage.Format.Format_RGB888,
-        ).copy()
-        return QPixmap.fromImage(image)
-
-    def _show_image(self, label, frame):
+    def _show_image(self, widget, frame):
         if frame is None:
             return
 
-        label.setPixmap(self._frame_to_pixmap(frame))
+        widget.set_frame(frame)
 
     def show_frame(self, frame):
         self._show_image(self.image_label, frame)

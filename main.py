@@ -145,45 +145,23 @@ class DroneHeatmap:
     def label_mask(self, image: np.ndarray, segmentations: list[Segmentation]):
         if not self.masks: return None
 
-        h, w = image.shape[:2]
-        small_size = (
-            max(1, int(w * VISUAL_PROCESS_SCALE)),
-            max(1, int(h * VISUAL_PROCESS_SCALE)),
-        )
-        small_image = cv2.resize(
-            image,
-            small_size,
-            interpolation=cv2.INTER_AREA,
-        )
-        mask_frame = np.zeros_like(small_image)
-        blur_size = max(3, int(51 * VISUAL_PROCESS_SCALE))
-        if blur_size % 2 == 0:
-            blur_size += 1
+        mask_frame = np.zeros_like(image)
 
         for segmentation in segmentations:
             if segmentation.label.lower() not in self.masks:
                 continue
 
-            mask = cv2.resize(
-                segmentation.mask.astype(np.uint8),
-                small_size,
-                interpolation=cv2.INTER_NEAREST,
-            )
-            mask_bool = mask.astype(bool)
-            mask_frame[mask_bool] = small_image[mask_bool]
+            mask = segmentation.mask.astype(np.uint8)
+            x, y, width, height = cv2.boundingRect(mask)
+            if width == 0 or height == 0:
+                continue
 
-            # TODO: only blur along the edges (if at all)
-            # blurred = cv2.GaussianBlur(mask * 255, (blur_size, blur_size), 0)
-            # alpha = (blurred.astype(np.float32) / 255.0)[..., None]
-
-            # feathered = (
-            #     mask_frame.astype(np.float32) * (1.0 - alpha)
-            #     + small_image.astype(np.float32) * alpha
-            # ).astype(np.uint8)
-
-            # mask_frame[~mask_bool] = feathered[~mask_bool]
+            mask_roi = mask[y:y + height, x:x + width].astype(bool)
+            image_roi = image[y:y + height, x:x + width]
+            output_roi = mask_frame[y:y + height, x:x + width]
+            output_roi[mask_roi] = image_roi[mask_roi]
                         
-        return cv2.resize(mask_frame, (w, h), interpolation=cv2.INTER_LINEAR)
+        return mask_frame
 
     def run(self):
 
