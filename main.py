@@ -10,7 +10,7 @@ import traceback
 from dotenv import load_dotenv
 import numpy as np
 
-from scripts.video_helper import label_mask
+from scripts.video_helper import label_mask, safe_imwrite
 
 from modules.SceneUnderstanding import SceneUnderstanding
 from modules.Heatmap import Heatmap
@@ -19,6 +19,7 @@ from modules.GraphBuilder import GraphBuilder
 from modules.GraphChat import ChatWithGraph
 from modules.GeoLocalizer import GeoLocalizer
 from modules.AppUI import AppUI
+from modules.PanoramaBuilder import PanoramaBuilder
 
 from scripts.video_helper import (
     compose_video_frame,
@@ -40,7 +41,7 @@ def parse_args():
 
 
 class DroneHeatmap: 
-    def __init__(self, dataset_root: str, task="Find cars", mask=None, sam_step=30):
+    def __init__(self, dataset_root: str, task="Find cars", mask=None, sam_step=15):
         self.dataset_root = Path(dataset_root)
         self.task = task
         self.masks = mask
@@ -62,6 +63,9 @@ class DroneHeatmap:
         self.graph_chat = ChatWithGraph(self.graph_builder.G)
 
         self.masks = {m.lower() for m in mask}
+
+        self.heat_panoramic_builder = PanoramaBuilder(alpha=0.9)
+        self.panoramic_builder = PanoramaBuilder(alpha=0.5)
 
         self.video_writer = None
         self.video_path = None
@@ -148,6 +152,7 @@ class DroneHeatmap:
 
         if self.has_next():
 
+            # Get Frame Info
             frame = self.get_next_frame()
             if frame is None:
                 return
@@ -166,6 +171,7 @@ class DroneHeatmap:
                 scene_dict = self.scene_understanding.get_labels(image, self.task)
             # print(scene_dict)
 
+            # Get Segmentations From Image
             segmentations = self.segmentation.get_segmentations(image, scene_dict)
             if segmentations is None:
                 segmentations = []
@@ -178,6 +184,7 @@ class DroneHeatmap:
                 )
                 # cv2.imshow("Segmentation", segmentation.mask.astype(np.uint8) * 255)
 
+            # Set Segmentation Types to Display
             mask_frame = None
             if self.masks:
                 mask_frame = label_mask(self.masks, image, segmentations)
@@ -186,14 +193,29 @@ class DroneHeatmap:
             # graph_frame = self.graph_builder.render_2d_graph_frame()
             graph_frame = None
     
+            # Create Heatmap
             heatmap = self.heatmap.draw_heatmap(image, segmentations)
-
             # print(f"Frame {frame['frame_index']}:", end=" ")
             # for node_id in self.graph_builder.G.nodes:
             #     print(node_id, end=" ")
             # print()
-
             if heatmap is not None: out = heatmap
+
+            # Create Panoramic Images
+            os.makedirs(f"{self.output_dir}/heat_panorama", exist_ok=True)
+            os.makedirs(f"{self.output_dir}/panorama", exist_ok=True)
+            transform = self.segmentation.transform_dx, self.segmentation.transform_dy
+
+            heat_panorama = self.heat_panoramic_builder.create_panorama(transform, heatmap)
+            # cv2.imshow("Heat Panorama", self.heat_panoramic_builder.panorama)
+            # cv2.waitKey(1)
+            if self.index % 10 == 0: safe_imwrite(f"{self.output_dir}/heat_panorama/heat_panorama_{self.index}.png", heat_panorama)
+
+            panorama = self.panoramic_builder.create_panorama(transform, image)
+            # cv2.imshow("Panorama", self.panoramic_builder.panorama)
+            # cv2.waitKey(1)
+            if self.index % 10 == 0: safe_imwrite(f"{self.output_dir}/panorama/panorama_{self.index}.png", panorama)
+
 
             video_frame = self.show_video(
                 out,

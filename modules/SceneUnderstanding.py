@@ -119,7 +119,7 @@ class SceneUnderstanding:
 
         image = cv2.resize(
             image,
-            (384, 384),
+            (224, 224),
             interpolation=cv2.INTER_AREA
         )
 

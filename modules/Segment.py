@@ -4,6 +4,7 @@ import cv2
 from dataclasses import dataclass
 import time 
 from config.prompts import PROMPT_TEMPLATES
+from modules.PanoramaBuilder import PanoramaBuilder
 
 FLOW_SCALE = 0.05
 
@@ -35,6 +36,9 @@ class Segment():
 
         self.dis = cv2.DISOpticalFlow_create(cv2.DISOPTICAL_FLOW_PRESET_MEDIUM)
         self.prev_gray = None
+
+        self.transform_dx = 0
+        self.transform_dy = 0
 
     def _parse_dict(self, scene_dict):
         prompts = []
@@ -77,6 +81,9 @@ class Segment():
         flow[..., 0] /= FLOW_SCALE
         flow[..., 1] /= FLOW_SCALE
 
+        self.transform_dx = float(np.median(flow[..., 0]))
+        self.transform_dy = float(np.median(flow[..., 1]))
+
         x, y = np.meshgrid(np.arange(w), np.arange(h))
 
         map_x = (x + flow[..., 0]).astype(np.float32)
@@ -85,8 +92,7 @@ class Segment():
         self.prev_gray = curr_gray_full
 
         return map_x, map_y
-    
-    
+
     def _create_segmentation(self, mask: np.ndarray, label, score):
         self.segmentations.append(
             Segmentation(
@@ -98,6 +104,9 @@ class Segment():
         )
 
     def get_segmentations(self, image, scene_dict):
+
+        # get segmentations
+
         if scene_dict is None: # Not SAM step
 
             if self.prev_gray is None: return None
@@ -130,9 +139,9 @@ class Segment():
             if not results: return None
             result = results[0]
 
-            annotated = result.plot()
-            cv2.imshow("SAM3", annotated)
-            cv2.waitKey(1)
+            # annotated = result.plot()
+            # cv2.imshow("SAM3", annotated)
+            # cv2.waitKey(1)
 
             if result.masks is None: return None
             masks = result.masks.data.cpu().numpy()  # (N, H, W)
