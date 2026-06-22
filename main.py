@@ -2,6 +2,7 @@ import os
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 
 import argparse
+import math
 import time
 from pathlib import Path
 import cv2
@@ -32,6 +33,11 @@ VISUAL_PROCESS_SCALE = .8
 
 def parse_args():
     parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--dataset-root",
+        default=r"C:\Users\jletobar3\Downloads\UAV_VisLoc_example\03",
+        help="Dataset root. Supports old query.csv/query_images or UAV_VisLoc csv/drone layouts.",
+    )
     parser.add_argument("--task", default="Find cars")
     parser.add_argument("--mask", nargs="*", default=[])
     parser.add_argument("--record-ui", action="store_true")
@@ -43,12 +49,10 @@ class DroneHeatmap:
     def __init__(self, dataset_root: str, task="Find cars", mask=None, sam_step=30):
         self.dataset_root = Path(dataset_root)
         self.task = task
-        self.masks = mask
+        self.masks = mask or []
         self.sam_step = sam_step
         
-        self.query_csv = pd.read_csv(self.dataset_root / "query.csv")
-
-        self.query_images_dir = (self.dataset_root / "query_images")
+        self.query_csv, self.query_images_dir = self._load_dataset_index()
 
         self.index = 0
         self.output_dir = Path("examples") / time.strftime("%Y-%m-%d_%H-%M-%S")
@@ -61,10 +65,90 @@ class DroneHeatmap:
         self.geo_localizer = GeoLocalizer()
         self.graph_chat = ChatWithGraph(self.graph_builder.G)
 
-        self.masks = {m.lower() for m in mask}
+        self.masks = {m.lower() for m in self.masks}
 
         self.video_writer = None
         self.video_path = None
+
+    def _load_dataset_index(self):
+        old_query_csv = self.dataset_root / "query.csv"
+        old_query_images_dir = self.dataset_root / "query_images"
+
+        if old_query_csv.exists():
+            query_csv = pd.read_csv(old_query_csv)
+            if "name" not in query_csv.columns:
+                raise ValueError(f"{old_query_csv} must contain a 'name' column.")
+            if "altitude" not in query_csv.columns:
+                raise ValueError(f"{old_query_csv} must contain an 'altitude' column.")
+            return query_csv, old_query_images_dir
+
+        csv_files = sorted(self.dataset_root.glob("*.csv"))
+        if not csv_files:
+            raise FileNotFoundError(
+                f"No query.csv or UAV_VisLoc csv file found in {self.dataset_root}"
+            )
+
+        drone_dir = self.dataset_root / "drone"
+        if not drone_dir.exists():
+            raise FileNotFoundError(f"Expected drone image folder at {drone_dir}")
+
+        query_csv = pd.read_csv(csv_files[0])
+        if "filename" not in query_csv.columns:
+            raise ValueError(f"{csv_files[0]} must contain a 'filename' column.")
+        required_columns = {"lat", "lon", "height"}
+        missing_columns = required_columns - set(query_csv.columns)
+        if missing_columns:
+            missing = ", ".join(sorted(missing_columns))
+            raise ValueError(f"{csv_files[0]} is missing required column(s): {missing}")
+
+        query_csv = self._normalize_uav_visloc_csv(query_csv)
+
+        return query_csv, drone_dir
+
+    def _normalize_uav_visloc_csv(self, query_csv):
+        query_csv = query_csv.copy()
+        origin_lat = float(query_csv.iloc[0]["lat"])
+        origin_lon = float(query_csv.iloc[0]["lon"])
+
+        meters_per_degree_lat = 111_320.0
+        meters_per_degree_lon = (
+            meters_per_degree_lat * math.cos(math.radians(origin_lat))
+        )
+
+        query_csv["name"] = query_csv["filename"]
+        query_csv["easting"] = (
+            query_csv["lon"].astype(float) - origin_lon
+        ) * meters_per_degree_lon
+        query_csv["northing"] = (
+            query_csv["lat"].astype(float) - origin_lat
+        ) * meters_per_degree_lat
+        query_csv["altitude"] = query_csv["height"].astype(float)
+
+        orientation_columns = {
+            "Omega": "orient_x",
+            "Kappa": "orient_y",
+            "Phi1": "orient_z",
+            "Phi2": "orient_w",
+        }
+        for source_column, target_column in orientation_columns.items():
+            query_csv[target_column] = self._series_or_default(
+                query_csv,
+                source_column,
+                0.0,
+            )
+
+        return query_csv
+
+    def _series_or_default(self, dataframe, column, default):
+        if column in dataframe.columns:
+            return dataframe[column].astype(float)
+        return default
+
+    def _row_value(self, row, *columns, default=0.0):
+        for column in columns:
+            if column in row and pd.notna(row[column]):
+                return row[column]
+        return default
 
     def has_next(self) -> bool:
         return self.index < len(self.query_csv)
@@ -81,7 +165,8 @@ class DroneHeatmap:
             row = self.query_csv.iloc[frame_index]
             self.index += 1
 
-            image_path = (self.query_images_dir / row["name"])
+            image_name = self._row_value(row, "name", "filename", default="")
+            image_path = (self.query_images_dir / str(image_name))
             image = cv2.imread(str(image_path))
 
             if image is None:
@@ -98,10 +183,10 @@ class DroneHeatmap:
                 "northing": row["northing"],
                 "altitude": row["altitude"],
                 "orientation": (
-                    row["orient_x"],
-                    row["orient_y"],
-                    row["orient_z"],
-                    row["orient_w"],
+                    self._row_value(row, "orient_x"),
+                    self._row_value(row, "orient_y"),
+                    self._row_value(row, "orient_z"),
+                    self._row_value(row, "orient_w"),
                 ),
                 "frame_index": frame_index,
             }
@@ -217,7 +302,7 @@ if __name__ == "__main__":
 
     args = parse_args()
     drone = DroneHeatmap(
-        r"D:\Train\Train",
+        args.dataset_root,
         task=args.task,
         mask=args.mask,
     )
