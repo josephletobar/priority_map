@@ -1,5 +1,6 @@
 import numpy as np
 import cv2
+from modules.PanoramaBuilder import PanoramaBuilder
 
 HEATMAP_PROCESS_SCALE = 1
 
@@ -7,6 +8,9 @@ HEATMAP_PROCESS_SCALE = 1
 class Heatmap:
     def __init__(self):
         self.heat_gamma = 10.0
+
+        self.transform_dx = 0
+        self.transform_dy = 0
 
     def _create_heatmap(self, image, regions):
         if not regions: return image
@@ -98,5 +102,12 @@ class Heatmap:
 
         heatmap = self._create_heatmap(image, segmentations)
         # heatmap = self._draw_node_labels(heatmap)
+
+        # transform = self.panoramic_transform.transform_dx, self.panoramic_transform.transform_dy
+        # self.panorama_builder.create_panorama(transform, heatmap)
+        # # cv2.imshow("Panorama Heat", self.panorama_builder.panorama)
+        # # cv2.waitKey(1)
+
+        self.prev_heat = heatmap
 
         return heatmap

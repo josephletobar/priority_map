@@ -142,3 +142,30 @@ def label_mask(masks: list[str], image: np.ndarray, segmentations: list[Segmenta
         output_roi[mask_bool] = image_roi[mask_bool]
                     
     return mask_frame
+
+def safe_imwrite(path: str, image: np.ndarray, max_dim: int = 8000) -> bool:
+    if image is None:
+        return False
+
+    h, w = image.shape[:2]
+
+    scale = min(
+        1.0,
+        max_dim / max(h, w)
+    )
+
+    if scale < 1.0:
+        image = cv2.resize(
+            image,
+            (
+                int(w * scale),
+                int(h * scale)
+            ),
+            interpolation=cv2.INTER_AREA
+        )
+
+    try:
+        return cv2.imwrite(path, image)
+    except Exception as e:
+        print(f"Failed to save {path}: {e}")
+        return False
