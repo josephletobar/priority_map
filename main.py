@@ -15,11 +15,10 @@ from scripts.video_helper import label_mask, safe_imwrite
 
 from modules.SceneUnderstanding import SceneUnderstanding
 from modules.Heatmap import Heatmap
-from modules.Segment import Segment, Segmentation
+from modules.Segment import Segment, Segmentation, _resize_to_screen
 from modules.GraphBuilder import GraphBuilder
 from modules.GraphChat import ChatWithGraph
 from modules.GeoLocalizer import GeoLocalizer
-from modules.AppUI import AppUI
 from modules.PanoramaBuilder import PanoramaBuilder
 
 from scripts.video_helper import (
@@ -30,8 +29,6 @@ from scripts.video_helper import (
 
 load_dotenv()
 
-VISUAL_PROCESS_SCALE = .8
-
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -41,13 +38,14 @@ def parse_args():
     )
     parser.add_argument("--task", default="Find cars")
     parser.add_argument("--mask", nargs="*", default=[])
+    parser.add_argument("--ui", action="store_true")
     parser.add_argument("--record-ui", action="store_true")
     parser.add_argument("--record-graph", action="store_true")
     return parser.parse_args()
 
 
 class DroneHeatmap: 
-    def __init__(self, dataset_root: str, task="Find cars", mask=None, sam_step=15):
+    def __init__(self, dataset_root: str, task="Find cars", mask=None, sam_step=3):
         self.dataset_root = Path(dataset_root)
         self.task = task
         self.masks = mask or []
@@ -320,14 +318,31 @@ class DroneHeatmap:
         return None
         
 
-if __name__ == "__main__":
+def run_cv2_loop(drone):
+    window_name = "Drone Heatmap"
 
-    args = parse_args()
-    drone = DroneHeatmap(
-        args.dataset_root,
-        task=args.task,
-        mask=args.mask,
-    )
+    while drone.has_next():
+        result = drone.run()
+        if result is None:
+            break
+
+        if isinstance(result, tuple):
+            frame = result[0]
+        else:
+            frame = result
+
+        if frame is None:
+            break
+
+        cv2.imshow(window_name, _resize_to_screen(frame))
+        key = cv2.waitKey(1) & 0xFF
+        if key in (ord("q"), 27):
+            break
+
+
+def run_app_ui(drone, args):
+    from modules.AppUI import AppUI
+
     ui = AppUI(
         on_submit=drone.ask_graph,
         on_mask_change=drone.set_masks,
@@ -354,4 +369,30 @@ if __name__ == "__main__":
         drone.close_video()
         ui.close()
 
+def main():
+    args = parse_args()
+    drone = DroneHeatmap(
+        args.dataset_root,
+        task=args.task,
+        mask=args.mask,
+    )
+
+    try:
+        if args.ui:
+            run_app_ui(drone, args)
+        else:
+            if args.record_ui or args.record_graph:
+                print("--record-ui and --record-graph only apply when --ui is set.")
+            run_cv2_loop(drone)
+
+    except Exception:
+        traceback.print_exc()
+
+    finally:
+        drone.close_video()
+        cv2.destroyAllWindows()
         drone.graph_builder.draw_3d_graph()
+
+
+if __name__ == "__main__":
+    main()

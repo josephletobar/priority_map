@@ -1,14 +1,57 @@
 import numpy as np
 from ultralytics.models.sam import SAM3SemanticPredictor
 import cv2
+import ctypes
 from dataclasses import dataclass
 import time 
 from config.prompts import PROMPT_TEMPLATES
 from modules.PanoramaBuilder import PanoramaBuilder
 
 FLOW_SCALE = 0.05
+SAM3_PREVIEW_MARGIN = 120
+SAM3_INFERENCE_SIZE = (720, 480)
 
 PROMPT_TEMPLATE = "{prompt} seen from above"
+
+
+def _screen_size(default=(1280, 720)):
+    try:
+        user32 = ctypes.windll.user32
+        return user32.GetSystemMetrics(0), user32.GetSystemMetrics(1)
+    except Exception:
+        return default
+
+
+def _resize_to_screen(image, margin=SAM3_PREVIEW_MARGIN):
+    if image is None:
+        return None
+
+    screen_width, screen_height = _screen_size()
+    max_width = max(1, screen_width - margin)
+    max_height = max(1, screen_height - margin)
+    height, width = image.shape[:2]
+    scale = min(max_width / max(width, 1), max_height / max(height, 1), 1.0)
+
+    if scale >= 1.0:
+        return image
+
+    return cv2.resize(
+        image,
+        (
+            max(1, int(width * scale)),
+            max(1, int(height * scale)),
+        ),
+        interpolation=cv2.INTER_AREA,
+    )
+
+
+def _resize_for_sam(image):
+    height, width = image.shape[:2]
+    if (width, height) == SAM3_INFERENCE_SIZE:
+        return image
+
+    interpolation = cv2.INTER_AREA if width > SAM3_INFERENCE_SIZE[0] or height > SAM3_INFERENCE_SIZE[1] else cv2.INTER_LINEAR
+    return cv2.resize(image, SAM3_INFERENCE_SIZE, interpolation=interpolation)
 
 @dataclass
 class Segmentation:
@@ -25,7 +68,7 @@ class Segment():
         self.segmentations = []
 
         overrides = dict(
-            conf=0.5,
+            conf=0.1,
             task="segment",
             mode="predict",
             model="models/sam3.pt",
@@ -104,8 +147,7 @@ class Segment():
         )
 
     def get_segmentations(self, image, scene_dict):
-
-        # get segmentations
+        image_height, image_width = image.shape[:2]
 
         if scene_dict is None: # Not SAM step
 
@@ -135,13 +177,14 @@ class Segment():
             if len(prompts) < 1:
                 return None
         
-            results = self.predictor(image, text=prompts)
+            sam_image = _resize_for_sam(image)
+            results = self.predictor(sam_image, text=prompts)
             if not results: return None
             result = results[0]
 
-            # annotated = result.plot()
-            # cv2.imshow("SAM3", annotated)
-            # cv2.waitKey(1)
+            annotated = result.plot()
+            cv2.imshow("SAM3", _resize_to_screen(annotated))
+            cv2.waitKey(1)
 
             if result.masks is None: return None
             masks = result.masks.data.cpu().numpy()  # (N, H, W)
@@ -153,6 +196,10 @@ class Segment():
                     continue
 
                 mask = masks[i]
+                mask = mask.astype(np.uint8)
+                if mask.shape[:2] != (image_height, image_width):
+                    mask = cv2.resize(mask, (image_width, image_height), interpolation=cv2.INTER_NEAREST)
+
                 label = prompt_to_label[prompt]
                 score = scene_dict[label]["score"]
 
