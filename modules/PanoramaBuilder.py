@@ -22,8 +22,8 @@ class PanoramaBuilder:
             self.pan_y = 0
             return
         else:
-            self.pan_x += transform_dx
-            self.pan_y += transform_dy
+            self.pan_x -= transform_dx
+            self.pan_y -= transform_dy
 
             x = int(self.pan_x)
             y = int(self.pan_y)
@@ -57,11 +57,11 @@ class PanoramaBuilder:
             # fill empty pixels
             roi[mask] = image[mask]
 
-            # average overlapping pixels=
-            roi[~mask] = (
-                self.alpha * roi[~mask].astype(np.float32)
-                + (1 - self.alpha) * image[~mask].astype(np.float32)
-            ).astype(np.uint8)
+            # average overlapping pixels (commented out for testing)
+            # roi[~mask] = (
+            #     self.alpha * roi[~mask].astype(np.float32)
+            #     + (1 - self.alpha) * image[~mask].astype(np.float32)
+            # ).astype(np.uint8)
 
             self.panorama = new_panorama
 

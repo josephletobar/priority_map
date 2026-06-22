@@ -189,12 +189,12 @@ def debug():
         },
 
         "road": {
-            "prompt": "road, street, or highway",
+            "prompt": "road, street",
             "score": 90,
         },
 
         "building": {
-            "prompt": "rooftop, building, house, facility",
+            "prompt": "buildings",
             "score": 80,
         },
 

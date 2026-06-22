@@ -38,7 +38,7 @@ def parse_args():
     )
     parser.add_argument(
         "--dataset-root",
-        default=r"C:\Users\jletobar3\Downloads\UAV_VisLoc_example\03\drone",
+        default=r"D:\Train\Train\query_images",
         help="Dataset root. Supports plain image folders, old query.csv/query_images, or UAV_VisLoc csv/drone layouts.",
     )
     parser.add_argument("--task", default="Find cars")
@@ -50,7 +50,7 @@ def parse_args():
 
 
 class DroneHeatmap: 
-    def __init__(self, dataset_root: str, task="Find cars", mask=None, sam_step=3):
+    def __init__(self, dataset_root: str, task="Find cars", mask=None, sam_step=15):
         self.dataset_root = Path(dataset_root)
         self.task = task
         self.masks = mask or []

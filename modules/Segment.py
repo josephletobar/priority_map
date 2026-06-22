@@ -11,7 +11,7 @@ FLOW_SCALE = 0.05
 SAM3_PREVIEW_MARGIN = 120
 SAM3_INFERENCE_SIZE = (720, 480)
 
-PROMPT_TEMPLATE = "{prompt} seen from above"
+PROMPT_TEMPLATE = "{prompt}"
 
 
 def _screen_size(default=(1280, 720)):
@@ -68,7 +68,7 @@ class Segment():
         self.segmentations = []
 
         overrides = dict(
-            conf=0.1,
+            conf=0.3,
             task="segment",
             mode="predict",
             model="models/sam3.pt",
@@ -148,65 +148,54 @@ class Segment():
 
     def get_segmentations(self, image, scene_dict):
         image_height, image_width = image.shape[:2]
+        curr_gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
 
-        if scene_dict is None: # Not SAM step
-
-            if self.prev_gray is None: return None
-
+        # Compute optical flow on every frame (if we have previous frame)
+        if self.prev_gray is not None:
             map_x, map_y = self._get_flow_map(image)
 
             for segmentation in self.segmentations:
                 segmentation.mask = cv2.remap(
-                    segmentation.mask.astype(np.uint8),  # mask being tracked
-                    map_x,                            # x-coordinate lookup table from optical flow
-                    map_y,                            # y-coordinate lookup table from optical flow
-                    interpolation=cv2.INTER_NEAREST,  # preserve binary mask values (0/1)
-                    borderMode=cv2.BORDER_CONSTANT,   # pixels outside image become a constant value
-                    borderValue=0                    # outside-image pixels become background
+                    segmentation.mask.astype(np.uint8),
+                    map_x,
+                    map_y,
+                    interpolation=cv2.INTER_NEAREST,
+                    borderMode=cv2.BORDER_CONSTANT,
+                    borderValue=0
                 )
 
-
-        else: # SAM step
-            self.prev_gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-
-            if scene_dict is None:
-                return None
-
+        # Run SAM if this is a SAM step
+        if scene_dict is not None:
             prompts, prompt_to_label = self._parse_dict(scene_dict)
 
-            if len(prompts) < 1:
-                return None
-        
-            sam_image = _resize_for_sam(image)
-            results = self.predictor(sam_image, text=prompts)
-            if not results: return None
-            result = results[0]
+            if len(prompts) >= 1:
+                sam_image = _resize_for_sam(image)
+                results = self.predictor(sam_image, text=prompts)
+                if results:
+                    result = results[0]
 
-            annotated = result.plot()
-            cv2.imshow("SAM3", _resize_to_screen(annotated))
-            cv2.waitKey(1)
+                    annotated = result.plot()
+                    cv2.imshow("SAM3", _resize_to_screen(annotated))
+                    cv2.waitKey(1)
 
-            if result.masks is None: return None
-            masks = result.masks.data.cpu().numpy()  # (N, H, W)
+                    if result.masks is not None:
+                        masks = result.masks.data.cpu().numpy()  # (N, H, W)
 
-            self.segmentations = []
-            for i in range(len(result.boxes)):
-                prompt = result.names[int(result.boxes.cls[i])]
-                if prompt not in prompt_to_label:
-                    continue
+                        self.segmentations = []
+                        for i in range(len(result.boxes)):
+                            prompt = result.names[int(result.boxes.cls[i])]
+                            if prompt not in prompt_to_label:
+                                continue
 
-                mask = masks[i]
-                mask = mask.astype(np.uint8)
-                if mask.shape[:2] != (image_height, image_width):
-                    mask = cv2.resize(mask, (image_width, image_height), interpolation=cv2.INTER_NEAREST)
+                            mask = masks[i]
+                            mask = mask.astype(np.uint8)
+                            if mask.shape[:2] != (image_height, image_width):
+                                mask = cv2.resize(mask, (image_width, image_height), interpolation=cv2.INTER_NEAREST)
 
-                label = prompt_to_label[prompt]
-                score = scene_dict[label]["score"]
+                            label = prompt_to_label[prompt]
+                            score = scene_dict[label]["score"]
 
-                self._create_segmentation(mask, label, score)
+                            self._create_segmentation(mask, label, score)
 
-
-            # self._create_nodes()
-
-
+        self.prev_gray = curr_gray
         return self.segmentations
