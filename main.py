@@ -32,9 +32,14 @@ load_dotenv()
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument(
+        "image_folder",
+        nargs="?",
+        help="Folder of images to process.",
+    )
+    parser.add_argument(
         "--dataset-root",
-        default=r"C:\Users\jletobar3\Downloads\UAV_VisLoc_example\03",
-        help="Dataset root. Supports old query.csv/query_images or UAV_VisLoc csv/drone layouts.",
+        default=r"C:\Users\jletobar3\Downloads\UAV_VisLoc_example\03\drone",
+        help="Dataset root. Supports plain image folders, old query.csv/query_images, or UAV_VisLoc csv/drone layouts.",
     )
     parser.add_argument("--task", default="Find cars")
     parser.add_argument("--mask", nargs="*", default=[])
@@ -73,6 +78,8 @@ class DroneHeatmap:
         self.video_path = None
 
     def _load_dataset_index(self):
+        image_extensions = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".webp"}
+
         old_query_csv = self.dataset_root / "query.csv"
         old_query_images_dir = self.dataset_root / "query_images"
 
@@ -84,10 +91,19 @@ class DroneHeatmap:
                 raise ValueError(f"{old_query_csv} must contain an 'altitude' column.")
             return query_csv, old_query_images_dir
 
+        image_files = [
+            path
+            for path in sorted(self.dataset_root.iterdir())
+            if path.is_file() and path.suffix.lower() in image_extensions
+        ]
+        if image_files:
+            query_csv = pd.DataFrame({"name": [path.name for path in image_files]})
+            return query_csv, self.dataset_root
+
         csv_files = sorted(self.dataset_root.glob("*.csv"))
         if not csv_files:
             raise FileNotFoundError(
-                f"No query.csv or UAV_VisLoc csv file found in {self.dataset_root}"
+                f"No images, query.csv, or UAV_VisLoc csv file found in {self.dataset_root}"
             )
 
         drone_dir = self.dataset_root / "drone"
@@ -181,15 +197,11 @@ class DroneHeatmap:
             return {
                 "image": image,
                 "image_path": str(image_path),
-                "easting": row["easting"],
-                "northing": row["northing"],
-                "altitude": row["altitude"],
-                "orientation": (
-                    self._row_value(row, "orient_x"),
-                    self._row_value(row, "orient_y"),
-                    self._row_value(row, "orient_z"),
-                    self._row_value(row, "orient_w"),
-                ),
+                # Position metadata is intentionally disabled for plain image-folder runs.
+                "easting": self._row_value(row, "easting"),
+                "northing": self._row_value(row, "northing"),
+                "altitude": self._row_value(row, "altitude"),
+                "orientation": None,
                 "frame_index": frame_index,
             }
 
@@ -243,11 +255,12 @@ class DroneHeatmap:
             image = frame["image"]
             out = image
 
-            position = (
-                frame["easting"],
-                frame["northing"],
-                frame["altitude"]
-            )
+            # Position/geolocation is disabled for now so a plain folder of images just works.
+            # position = (
+            #     frame["easting"],
+            #     frame["northing"],
+            #     frame["altitude"]
+            # )
 
             scene_dict = None
             if self.should_run_sam(frame):
@@ -260,11 +273,12 @@ class DroneHeatmap:
                 segmentations = []
 
             for segmentation in segmentations:
-                segmentation.geo_pos = self.geo_localizer.get_location(
-                    image,
-                    segmentation.mask,
-                    position
-                )
+                segmentation.geo_pos = None
+                # segmentation.geo_pos = self.geo_localizer.get_location(
+                #     image,
+                #     segmentation.mask,
+                #     position
+                # )
                 # cv2.imshow("Segmentation", segmentation.mask.astype(np.uint8) * 255)
 
             # Set Segmentation Types to Display
@@ -371,8 +385,9 @@ def run_app_ui(drone, args):
 
 def main():
     args = parse_args()
+    dataset_root = args.image_folder or args.dataset_root
     drone = DroneHeatmap(
-        args.dataset_root,
+        dataset_root,
         task=args.task,
         mask=args.mask,
     )
