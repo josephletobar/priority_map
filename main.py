@@ -21,7 +21,7 @@ from scripts.cluster_segmentations import cluster_segmentations, ClusteredSegmen
 from modules.SceneUnderstanding import SceneUnderstanding
 from modules.Heatmap import Heatmap
 from modules.Segment import Segment
-# from modules.GraphBuilder import GraphBuilder
+from modules.GraphBuilder import GraphBuilder
 # from modules.GraphChat import ChatWithGraph
 from modules.GeoLocalizer import GeoLocalizer
 from modules.PanoramaBuilder import PanoramaBuilder
@@ -70,8 +70,7 @@ class DroneHeatmap:
 
         self.scene_understanding = SceneUnderstanding()
         self.segmentation = Segment(show_preview=show)
-        # Graph building is disabled for now while debugging memory usage.
-        # self.graph_builder = GraphBuilder(graph_path=self.output_dir / "graph.json")
+        self.graph_builder = GraphBuilder(output_dir=self.output_dir)
         self.heatmap = Heatmap()
         self.geo_localizer = GeoLocalizer()
         self.masks = {m.lower() for m in self.masks}
@@ -83,6 +82,7 @@ class DroneHeatmap:
 
         self.heat_panoramic_builder = PanoramaBuilder(alpha=0.9)
         self.panoramic_builder = PanoramaBuilder(alpha=0.5)
+        self.show = show
 
     def _load_dataset_index(self):
         image_extensions = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".webp"}
@@ -164,6 +164,7 @@ class DroneHeatmap:
     
     def close_video(self):
         self.video_output.close()
+        self.graph_builder.close()
 
     def run_frame(self):
         frame = self.get_next_frame()
@@ -192,6 +193,14 @@ class DroneHeatmap:
 
         clustered = cluster_segmentations(segmentations)
 
+        if scene_dict is not None:
+            self.graph_builder.add_nodes(clustered)
+            if self.show:
+                self.graph_builder.render_2d_graph_frame()
+                if self.graph_builder.last_2d_frame is not None:
+                    cv2.imshow("2D Graph", self.graph_builder.last_2d_frame)
+                    cv2.waitKey(1)
+
         # for segmentation in segmentations:
         #     segmentation.geo_pos = None
             # segmentation.geo_pos = self.geo_localizer.get_location(
@@ -206,18 +215,13 @@ class DroneHeatmap:
         if self.masks:
             mask_frame = label_mask(self.masks, image, segmentations)
 
-        # curr_nodes = self.graph_builder.build_graph(segmentations)
     
         # Create Heatmap
         heatmap = self.heatmap.draw_heatmap(image, clustered)
-        # print(f"Frame {frame['frame_index']}:", end=" ")
-        # for node_id in self.graph_builder.G.nodes:
-        #     print(node_id, end=" ")
-        # print()
         if heatmap is not None:
             out = heatmap
 
-        # Commented out block for debugging now 
+        # Commented out Panorama block for debugging now 
         # # Create Panoramic Images
         # os.makedirs(f"{self.output_dir}/heat_panorama", exist_ok=True)
         # os.makedirs(f"{self.output_dir}/panorama", exist_ok=True)
