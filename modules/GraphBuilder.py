@@ -154,7 +154,7 @@ class GraphBuilder:
         if len(G.edges()) > 0:
             G = nx.minimum_spanning_tree(G, weight='weight')
 
-        fig, ax = plt.subplots(figsize=(8, 6))
+        fig, ax = plt.subplots(figsize=(8, 5))
 
         pos = {node_id: data['pos'] for node_id, data in nodes_data.items()}
         node_sizes = [(nodes_data[node_id]['score'] + 5) * 10 for node_id in G.nodes()]

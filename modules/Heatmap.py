@@ -7,7 +7,9 @@ HEATMAP_PROCESS_SCALE = 1
 
 class Heatmap:
     def __init__(self):
-        self.heat_gamma = 10.0
+        self.heat_gamma = 5.0
+
+        self.BLUR_SPREAD = 101
 
         self.transform_dx = 0
         self.transform_dy = 0
@@ -48,7 +50,7 @@ class Heatmap:
                 mask
             )
 
-        spread_size = max(3, int(401 * HEATMAP_PROCESS_SCALE))
+        spread_size = max(3, int(self.BLUR_SPREAD * HEATMAP_PROCESS_SCALE))
         if spread_size % 2 == 0:
             spread_size += 1
         spread = (spread_size, spread_size)

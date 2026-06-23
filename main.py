@@ -84,6 +84,7 @@ class DroneHeatmap:
         self.heat_panoramic_builder = PanoramaBuilder(alpha=0.9)
         self.panoramic_builder = PanoramaBuilder(alpha=0.5)
         self.show = show
+        self.last_graph_frame = None
 
     def _load_dataset_index(self):
         image_extensions = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".webp"}
@@ -206,11 +207,14 @@ class DroneHeatmap:
 
         if scene_dict is not None:
             self.graph_builder.add_nodes(clustered)
-            if self.show:
-                self.graph_builder.render_2d_graph_frame()
-                if self.graph_builder.last_2d_frame is not None:
-                    cv2.imshow("2D Graph", self.graph_builder.last_2d_frame)
-                    cv2.waitKey(1)
+            graph_frame = self.graph_builder.render_2d_graph_frame()
+            if graph_frame is not None:
+                self.last_graph_frame = graph_frame
+
+        if self.last_graph_frame is not None and out is not None:
+            heatmap_height = out.shape[0]
+            graph_resized = cv2.resize(self.last_graph_frame, (int(self.last_graph_frame.shape[1] * heatmap_height / self.last_graph_frame.shape[0]), heatmap_height))
+            out = cv2.hconcat([out, graph_resized])
 
         # Commented out Panorama block for debugging now 
         # # Create Panoramic Images
