@@ -31,7 +31,7 @@ Rules:
 
 Return exactly one valid JSON object with double-quoted keys/strings, no trailing commas, no markdown.
 
-Example schema, use only if they are present in the image:
+Example schema, use if the labels are present in the image:
 {{
     "trees": {{"prompt": "trees", "score": 0}},
     "field": {{"prompt": "field", "score": 30}},

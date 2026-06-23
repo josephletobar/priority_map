@@ -115,7 +115,7 @@ class SceneUnderstanding:
 
     def get_labels(self, image: np.ndarray, task: str):
 
-        # return debug()
+        return debug()
 
         image = cv2.resize(
             image,

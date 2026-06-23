@@ -7,9 +7,9 @@ HEATMAP_PROCESS_SCALE = 1
 
 class Heatmap:
     def __init__(self):
-        self.heat_gamma = 5.0
+        self.heat_gamma = 10.0
 
-        self.BLUR_SPREAD = 301
+        self.BLUR_SPREAD = 53.0
 
         self.transform_dx = 0
         self.transform_dy = 0
@@ -50,14 +50,17 @@ class Heatmap:
                 mask
             )
 
-        spread_size = max(3, int(self.BLUR_SPREAD * HEATMAP_PROCESS_SCALE))
+        spread_size = max(3, int(self.BLUR_SPREAD * HEATMAP_PROCESS_SCALE / 15))
         if spread_size % 2 == 0:
             spread_size += 1
-        spread = (spread_size, spread_size)
-        sigma = 0
-        heatmap = cv2.GaussianBlur(heatmap, spread, sigma)
-        valid = cv2.GaussianBlur(valid, spread, sigma)
-        heatmap = heatmap / (valid + 1e-6)
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (spread_size, spread_size))
+
+        decay = 0.95
+        for _ in range(15):
+            heatmap = cv2.dilate(heatmap, kernel, iterations=1)
+            heatmap = heatmap * decay
+
+        heatmap = cv2.GaussianBlur(heatmap, (201, 201), 0)
         heatmap = np.power(heatmap, 1 / self.heat_gamma) * 100
 
         heatmap = np.clip(heatmap, 0, 100)
