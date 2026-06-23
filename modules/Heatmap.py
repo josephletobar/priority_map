@@ -7,7 +7,7 @@ HEATMAP_PROCESS_SCALE = 1
 
 class Heatmap:
     def __init__(self):
-        self.heat_gamma = 1.0
+        self.heat_gamma = 10.0
 
         self.transform_dx = 0
         self.transform_dy = 0

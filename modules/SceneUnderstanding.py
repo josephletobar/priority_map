@@ -12,7 +12,7 @@ class SceneUnderstanding:
     def __init__(self):
         self.model = None
         self.vocabulary = {}
-        self.vocabulary_alpha = 0.25
+        self.vocabulary_alpha = 0.15
 
         self.client = LlamaVlmClient(host="169.254.89.19", port=8600)
         # print(help.analyze(prompt="hi"))
@@ -194,7 +194,7 @@ def debug():
         },
 
         "building": {
-            "prompt": "building, rooftops",
+            "prompt": "structure, rooftops",
             "score": 80,
         },
 
