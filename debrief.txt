@@ -1,0 +1,1 @@
+We are searching for a parked car in a rural area. Consider where parked vehicles are most likely to be found. Prioritize locations associated with roads, buildings, driveways, parking areas, and human activity. Score categories by how likely they are to help locate the vehicle.

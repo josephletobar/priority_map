@@ -42,6 +42,7 @@ def parse_args():
         help="Dataset root. Supports plain image folder.",
     )
     parser.add_argument("--task", default="Find cars")
+    parser.add_argument("--debrief", default = "debrief.txt")
     parser.add_argument("--mask", nargs="*", default=[])
     parser.add_argument("--show", action="store_true")
     parser.add_argument("--record", action="store_true")
@@ -53,6 +54,7 @@ class DroneHeatmap:
         self,
         dataset_root: str,
         task="Find vehcles",
+        debrief="debrief.txt",
         mask=None,
         sam_step=15,
         show=False,
@@ -60,6 +62,7 @@ class DroneHeatmap:
     ):
         self.dataset_root = Path(dataset_root)
         self.task = task
+        self.debrief = debrief
         self.masks = mask or []
         self.sam_step = sam_step
         
@@ -185,7 +188,7 @@ class DroneHeatmap:
 
         scene_dict = None
         if self.should_run_sam(frame):
-            scene_dict = self.scene_understanding.get_labels(image, self.task)
+            scene_dict = self.scene_understanding.get_labels(image, f"{self.task}: {self.debrief}")
         # print(scene_dict)
 
         # Get Segmentations From Image
@@ -261,6 +264,7 @@ def main():
     drone = DroneHeatmap(
         dataset_root,
         task=args.task,
+        debrief=args.debrief,
         mask=args.mask,
         show=args.show,
         record=args.record,

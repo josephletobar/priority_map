@@ -21,8 +21,8 @@ class SceneUnderstanding:
             if label not in self.vocabulary:
                 self.vocabulary[label] = score
             else:
-                # new_score = self.vocabulary_alpha * score + (1 - self.vocabulary_alpha) * self.vocabulary[label]
-                self.vocabulary[label] = score
+                new_score = self.vocabulary_alpha * score + (1 - self.vocabulary_alpha) * self.vocabulary[label]
+                self.vocabulary[label] = new_score
 
     def _loads_json_object(self, text):
         text = text.strip()
@@ -110,7 +110,7 @@ class SceneUnderstanding:
 
         image = cv2.resize(
             image,
-            (1024, 1024),
+            (512, 512),
             interpolation=cv2.INTER_AREA
         )
 
