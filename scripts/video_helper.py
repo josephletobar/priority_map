@@ -1,9 +1,10 @@
 import cv2
+import ctypes
 import numpy as np
 from pathlib import Path
-from modules.Segment import Segmentation
 
 MASK_EDGE_BLUR = 51
+PREVIEW_MARGIN = 120
 
 def video_path(output_dir="example", filename="video.mp4"):
     output_dir = Path(output_dir)
@@ -39,6 +40,37 @@ def get_video_writer(video_writer, image, output_dir, filename="video.mp4"):
         image,
         output_dir=output_dir,
         filename=filename,
+    )
+
+
+def screen_size(default=(1280, 720)):
+    try:
+        user32 = ctypes.windll.user32
+        return user32.GetSystemMetrics(0), user32.GetSystemMetrics(1)
+    except Exception:
+        return default
+
+
+def resize_to_screen(image, margin=PREVIEW_MARGIN):
+    if image is None:
+        return None
+
+    screen_width, screen_height = screen_size()
+    max_width = max(1, screen_width - margin)
+    max_height = max(1, screen_height - margin)
+    height, width = image.shape[:2]
+    scale = min(max_width / max(width, 1), max_height / max(height, 1), 1.0)
+
+    if scale >= 1.0:
+        return image
+
+    return cv2.resize(
+        image,
+        (
+            max(1, int(width * scale)),
+            max(1, int(height * scale)),
+        ),
+        interpolation=cv2.INTER_AREA,
     )
 
 
@@ -102,7 +134,85 @@ def compose_video_frame(image, header, side_image=None, side_header=None):
 
     return image
 
-def label_mask(masks: list[str], image: np.ndarray, segmentations: list[Segmentation]):
+
+def _handle_video_frame(
+    image,
+    header,
+    *,
+    side_image=None,
+    side_header=None,
+    show=False,
+    record=False,
+    output_dir="examples",
+    video_writer=None,
+    window_name=None,
+    margin=PREVIEW_MARGIN,
+):
+    image = compose_video_frame(
+        image,
+        header,
+        side_image=side_image,
+        side_header=side_header,
+    )
+
+    video_path = None
+    if record:
+        video_writer, video_path = get_video_writer(
+            video_writer,
+            image,
+            output_dir,
+        )
+        video_writer.write(image)
+
+    if show:
+        cv2.imshow(window_name or header, resize_to_screen(image, margin=margin))
+        key = cv2.waitKey(1) & 0xFF
+        if key in (ord("q"), 27):
+            return image, video_writer, video_path, False
+
+    return image, video_writer, video_path, True
+
+
+class VideoOutput:
+    def __init__(
+        self,
+        output_dir="examples",
+        show=False,
+        record=False,
+        window_name=None,
+        margin=PREVIEW_MARGIN,
+    ):
+        self.output_dir = output_dir
+        self.show = show
+        self.record = record
+        self.window_name = window_name
+        self.margin = margin
+        self.video_writer = None
+        self.video_path = None
+
+    def handle_frame(self, image, header, side_image=None, side_header=None):
+        image, self.video_writer, video_path, keep_running = _handle_video_frame(
+            image,
+            header,
+            side_image=side_image,
+            side_header=side_header,
+            show=self.show,
+            record=self.record,
+            output_dir=self.output_dir,
+            video_writer=self.video_writer,
+            window_name=self.window_name,
+            margin=self.margin,
+        )
+        if video_path is not None:
+            self.video_path = video_path
+        return keep_running
+
+    def close(self):
+        release_video_writer(self.video_writer)
+        self.video_writer = None
+
+
+def label_mask(masks: list[str], image: np.ndarray, segmentations: list):
     if not masks: return None
 
     mask_frame = np.zeros_like(image)

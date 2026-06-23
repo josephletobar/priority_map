@@ -1,4 +1,3 @@
-from openai import OpenAI
 import json
 from dotenv import load_dotenv
 from modules.GraphBuilder import GraphBuilder
@@ -20,6 +19,8 @@ class ChatWithGraph:
     def __init__(self, graph):
 
         load_dotenv(override=True)
+
+        from openai import OpenAI
 
         self.client = OpenAI()
 
@@ -138,6 +139,8 @@ class ChatWithGraph:
 
             Answer using only the graph data.
 
+            If the graph has no nodes, say that the graph is empty.
+
             If there is insufficient information in the graph to answer confidently, say so.
 
             Do not invent coordinates, physical destinations, or spatial distances.
@@ -147,13 +150,26 @@ class ChatWithGraph:
         return response.output_text
 
     def chat(self):
-
         prompt = input("\nYou: ")
 
         if prompt.lower() in ["quit", "exit"]:
-            return
+            return False
+
+        if not prompt:
+            return True
 
         response_text = self.ask(prompt)
 
         print("\nAssistant:")
         print(response_text)
+        return True
+
+    def run(self):
+        print("\nGraph chat started. Type 'quit' or 'exit' to leave.")
+        print(
+            f"Loaded graph with {self.graph.number_of_nodes()} node(s) "
+            f"and {self.graph.number_of_edges()} edge(s)."
+        )
+
+        while self.chat():
+            pass
