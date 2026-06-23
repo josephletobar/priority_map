@@ -212,25 +212,26 @@ class DroneHeatmap:
         if heatmap is not None:
             out = heatmap
 
-        # Create Panoramic Images
-        os.makedirs(f"{self.output_dir}/heat_panorama", exist_ok=True)
-        os.makedirs(f"{self.output_dir}/panorama", exist_ok=True)
-        transform = self.segmentation.transform_dx, self.segmentation.transform_dy
+        # Commented out block for debugging now 
+        # # Create Panoramic Images
+        # os.makedirs(f"{self.output_dir}/heat_panorama", exist_ok=True)
+        # os.makedirs(f"{self.output_dir}/panorama", exist_ok=True)
+        # transform = self.segmentation.transform_dx, self.segmentation.transform_dy
 
-        heat_panorama = self.heat_panoramic_builder.create_panorama(transform, heatmap)
-        # cv2.imshow("Heat Panorama", self.heat_panoramic_builder.panorama)
-        # cv2.waitKey(1)
-        if self.index % 10 == 0:
-            safe_imwrite(
-                f"{self.output_dir}/heat_panorama/heat_panorama_{self.index}.png",
-                heat_panorama,
-            )
+        # heat_panorama = self.heat_panoramic_builder.create_panorama(transform, heatmap)
+        # # cv2.imshow("Heat Panorama", self.heat_panoramic_builder.panorama)
+        # # cv2.waitKey(1)
+        # if self.index % 10 == 0:
+        #     safe_imwrite(
+        #         f"{self.output_dir}/heat_panorama/heat_panorama_{self.index}.png",
+        #         heat_panorama,
+        #     )
 
-        panorama = self.panoramic_builder.create_panorama(transform, image)
-        # cv2.imshow("Panorama", self.panoramic_builder.panorama)
-        # cv2.waitKey(1)
-        if self.index % 10 == 0:
-            safe_imwrite(f"{self.output_dir}/panorama/panorama_{self.index}.png", panorama)
+        # panorama = self.panoramic_builder.create_panorama(transform, image)
+        # # cv2.imshow("Panorama", self.panoramic_builder.panorama)
+        # # cv2.waitKey(1)
+        # if self.index % 10 == 0:
+        #     safe_imwrite(f"{self.output_dir}/panorama/panorama_{self.index}.png", panorama)
 
         return self.video_output.handle_frame(
             out,

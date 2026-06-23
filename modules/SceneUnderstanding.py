@@ -179,27 +179,27 @@ class SceneUnderstanding:
 def debug():
     return {
         "trees": {
-            "prompt": "dense forest, woodland, tree canopy, or heavily wooded area",
+            "prompt": "trees",
             "score": 0,
         },
 
         "field": {
-            "prompt": "open field, grassland, meadow, pasture, lawn",
+            "prompt": "field",
             "score": 30,
         },
 
         "road": {
-            "prompt": "road, street",
+            "prompt": "road",
             "score": 90,
         },
 
         "building": {
-            "prompt": "buildings",
+            "prompt": "building, rooftops",
             "score": 80,
         },
 
         "vehicle": {
-            "prompt": "vehicle, car, truck, van, or motorized ground transportation",
+            "prompt": "vehicle, car",
             "score": 100,
         },
     }
