@@ -17,21 +17,12 @@ class SceneUnderstanding:
     def _update_vocabulary(self, scene_dict):
         for label, label_info in scene_dict.items():
             score = float(label_info["score"])
-            prompts = label_info["prompt"]
-
+            
             if label not in self.vocabulary:
-                self.vocabulary[label] = {
-                    "prompt": prompts,
-                    "score": score,
-                }
+                self.vocabulary[label] = score
             else:
-                previous_score = self.vocabulary[label]["score"]
-                new_score = (
-                    self.vocabulary_alpha * score
-                    + (1 - self.vocabulary_alpha) * previous_score
-                )
-                self.vocabulary[label]["score"] = new_score
-                self.vocabulary[label]["prompt"] = prompts
+                # new_score = self.vocabulary_alpha * score + (1 - self.vocabulary_alpha) * self.vocabulary[label]
+                self.vocabulary[label] = score
 
     def _loads_json_object(self, text):
         text = text.strip()
@@ -115,11 +106,11 @@ class SceneUnderstanding:
 
     def get_labels(self, image: np.ndarray, task: str):
 
-        return debug()
+        # return debug()
 
         image = cv2.resize(
             image,
-            (224, 224),
+            (1024, 1024),
             interpolation=cv2.INTER_AREA
         )
 
@@ -133,7 +124,7 @@ class SceneUnderstanding:
 
         start = time.perf_counter()
         response = self.client.responses.create(
-            model="gpt-5-mini",
+            model="gpt-4.1-mini",
             input=[{
                 "role": "user",
                 "content": [
@@ -150,12 +141,13 @@ class SceneUnderstanding:
         print(f"\nGPT Vision inference time: {end - start:.2f} seconds")
 
         text = response.output_text
-        print(text)
+        # print(text)
 
         scene_dict = self._normalize_scene_dict(self._loads_json_object(text))
 
         self._update_vocabulary(scene_dict)
-        # print(self.vocabulary)111
+        
+        print(self.vocabulary)
 
         return scene_dict
         

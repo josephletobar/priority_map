@@ -52,7 +52,7 @@ class DroneHeatmap:
     def __init__(
         self,
         dataset_root: str,
-        task="Find cars",
+        task="Find vehcles",
         mask=None,
         sam_step=15,
         show=False,
