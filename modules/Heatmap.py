@@ -9,7 +9,7 @@ class Heatmap:
     def __init__(self):
         self.heat_gamma = 5.0
 
-        self.BLUR_SPREAD = 101
+        self.BLUR_SPREAD = 301
 
         self.transform_dx = 0
         self.transform_dy = 0

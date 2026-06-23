@@ -2,16 +2,13 @@ import numpy as np
 from ultralytics.models.sam import SAM3SemanticPredictor
 import cv2
 from dataclasses import dataclass
-import time 
-from config.prompts import PROMPT_TEMPLATES
+import time
 from modules.PanoramaBuilder import PanoramaBuilder
 from scripts.video_helper import VideoOutput
 
 FLOW_SCALE = 0.05
 SAM3_PREVIEW_MARGIN = 120
 SAM3_INFERENCE_SIZE = (720, 480)
-
-PROMPT_TEMPLATE = "{prompt}"
 
 
 def _resize_for_sam(image):
@@ -75,9 +72,8 @@ class Segment():
                 if not prompt:
                     continue
 
-                templated_prompt = PROMPT_TEMPLATE.format(prompt=prompt)
-                prompts.append(templated_prompt)
-                prompt_to_label[templated_prompt] = label
+                prompts.append(prompt)
+                prompt_to_label[prompt] = label
 
         return prompts, prompt_to_label
 

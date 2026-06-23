@@ -3,35 +3,35 @@ import numpy as np
 import base64
 import json
 import re
-from config.prompts import VLM_PROMPT, LLM_PROMPT
-from scripts.llama_request_helper import LlamaVlmClient
-from ollama import chat
 import time
+from openai import OpenAI
+from config.prompts import GPT_VISION_PROMPT
 
 class SceneUnderstanding:
     def __init__(self):
-        self.model = None
+        self.client = OpenAI()
         self.vocabulary = {}
         self.vocabulary_alpha = 0.15
 
-        self.client = LlamaVlmClient(host="169.254.89.19", port=8600)
-        # print(help.analyze(prompt="hi"))
-
-    def _vocabulary_labels(self):
-        return sorted(self.vocabulary.keys())
 
     def _update_vocabulary(self, scene_dict):
         for label, label_info in scene_dict.items():
             score = float(label_info["score"])
+            prompts = label_info["prompt"]
 
             if label not in self.vocabulary:
-                self.vocabulary[label] = score
+                self.vocabulary[label] = {
+                    "prompt": prompts,
+                    "score": score,
+                }
             else:
-                previous_score = self.vocabulary[label]
-                self.vocabulary[label] = (
+                previous_score = self.vocabulary[label]["score"]
+                new_score = (
                     self.vocabulary_alpha * score
                     + (1 - self.vocabulary_alpha) * previous_score
                 )
+                self.vocabulary[label]["score"] = new_score
+                self.vocabulary[label]["prompt"] = prompts
 
     def _loads_json_object(self, text):
         text = text.strip()
@@ -115,7 +115,7 @@ class SceneUnderstanding:
 
     def get_labels(self, image: np.ndarray, task: str):
 
-        return debug()
+        # return debug()
 
         image = cv2.resize(
             image,
@@ -124,54 +124,38 @@ class SceneUnderstanding:
         )
 
         _, buffer = cv2.imencode(".jpg", image)
-
         image_b64 = base64.b64encode(buffer.tobytes()).decode("utf-8")
-    
-        # VLM CALL
-        start = time.perf_counter()
-        response = chat(
-            model="qwen2.5vl:3b",
-            messages=[
-                {
-                    "role": "user",
-                    "content": VLM_PROMPT,
-                    "images": [image_b64],
-                }
-            ],
-        )
-        end = time.perf_counter()
-        print(f"\nVLM inference time: {end - start:.2f} seconds")
-        text = response["message"]["content"]
-        print(text)
 
-        # LLM CALL
-        llm_prompt = LLM_PROMPT.format(
-            observation = text,
-            task=json.dumps(task, indent=2),
-            vocabulary=json.dumps(self._vocabulary_labels(), indent=2),
+        prompt = GPT_VISION_PROMPT.format(
+            task=task,
+            vocabulary=json.dumps(self.vocabulary, indent=2),
         )
+
         start = time.perf_counter()
-        response = chat(
-            model="qwen2.5vl:3b",
-            messages=[
-                {
-                    "role": "user",
-                    "content": llm_prompt,
-                }
-            ],
+        response = self.client.responses.create(
+            model="gpt-5-mini",
+            input=[{
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": prompt},
+                    {
+                        "type": "input_image",
+                        "image_url": f"data:image/jpeg;base64,{image_b64}",
+                        "detail": "high"
+                    },
+                ],
+            }],
         )
         end = time.perf_counter()
-        print(f"\nLLM inference time: {end - start:.2f} seconds")
-        text = response["message"]["content"]
+        print(f"\nGPT Vision inference time: {end - start:.2f} seconds")
+
+        text = response.output_text
         print(text)
 
         scene_dict = self._normalize_scene_dict(self._loads_json_object(text))
 
         self._update_vocabulary(scene_dict)
-        print(self.vocabulary)
-
-        # time.sleep(500)
-
+        # print(self.vocabulary)111
 
         return scene_dict
         
