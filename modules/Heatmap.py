@@ -13,7 +13,7 @@ class Heatmap:
         self.transform_dy = 0
 
     def _create_heatmap(self, image, regions):
-        if not regions: return image
+        if not regions: return image, None
 
         h, w = image.shape[:2]
         small_size = (
@@ -61,53 +61,73 @@ class Heatmap:
         heatmap = np.clip(heatmap, 0, 100)
         heatmap = (heatmap * 2.55).astype(np.uint8)
 
-        heatmap = cv2.applyColorMap(heatmap, cv2.COLORMAP_JET)
+        heatmap_colored = cv2.applyColorMap(heatmap, cv2.COLORMAP_JET)
+        heatmap_resized = cv2.resize(heatmap_colored, (w, h), interpolation=cv2.INTER_LINEAR)
 
         output = cv2.addWeighted(
             small_image,    # base image
             0.6,      # weight of base image
-            heatmap,  # heatmap overlay image
+            heatmap_colored,  # heatmap overlay image
             0.4,      # weight of heatmap
             0         # constant brightness offset added to every pixel
         )
 
-        return cv2.resize(output, (w, h), interpolation=cv2.INTER_LINEAR)
+        return cv2.resize(output, (w, h), interpolation=cv2.INTER_LINEAR), heatmap_resized
 
-    # def _draw_node_labels(self, image):
-    #     output = image.copy()
+    def _draw_segmentation_labels(self, image, heatmap, segmentations):
+        output = image.copy()
+        height, width = output.shape[:2]
 
-    #     for node in self.nodes:
-    #         mask = node.mask > 0
-    #         if not np.any(mask):
-    #             continue
+        for segmentation in segmentations:
+            if segmentation.centroid is None:
+                continue
 
-    #         ys, xs = np.nonzero(mask)
-    #         x = int(xs.mean())
-    #         y = int(ys.mean())
+            x, y = segmentation.centroid
+            x = max(0, min(width - 1, int(x)))
+            y = max(0, min(height - 1, int(y)))
 
-    #         cv2.putText(
-    #             output,
-    #             node.label,
-    #             (x, y),
-    #             cv2.FONT_HERSHEY_SIMPLEX,
-    #             0.7,
-    #             (100, 100, 100),
-    #             2,
-    #             cv2.LINE_AA,
-    #         )
+            color = tuple(int(c) for c in heatmap[y, x])
 
-    #     return output
+            cv2.circle(
+                output,  # image
+                (x, y),  # center
+                int(4 * float(segmentation.score/100)),  # scaled according to relevance
+                color,  # BGR color from heatmap
+                -1,  # filled
+                cv2.LINE_AA,  # antialiased
+            )
+
+            text_size = cv2.getTextSize(segmentation.label, cv2.FONT_HERSHEY_SIMPLEX, 1.25 * float(segmentation.score/100), 2 if segmentation.score > 50 else 1)[0]
+            rect_top_left = (x + 4, y - text_size[1] - 10)
+            rect_bottom_right = (x + 8 + text_size[0], y + 2)
+
+            overlay = output.copy()
+            cv2.rectangle(overlay, rect_top_left, rect_bottom_right, (60, 60, 60), -1)  # gray filled
+            output = cv2.addWeighted(overlay, 0.6, output, 0.4, 0)  # blend
+
+            cv2.putText(
+                output,  # image
+                segmentation.label,  # text
+                (x + 6, y - 6),  # position
+                cv2.FONT_HERSHEY_SIMPLEX,  # font
+                1.25 * float(segmentation.score/100),  # scaled according to relevance
+                color,  # BGR color from heatmap
+                2 if segmentation.score > 50 else 1,  # thickness
+                cv2.LINE_AA,  # antialiased
+            )
+
+        return output
 
     def draw_heatmap(self, image, segmentations):
 
-        heatmap = self._create_heatmap(image, segmentations)
-        # heatmap = self._draw_node_labels(heatmap)
+        heatmap_overlaid, heatmap_colored = self._create_heatmap(image, segmentations)
+        result = self._draw_segmentation_labels(heatmap_overlaid, heatmap_colored, segmentations)
 
         # transform = self.panoramic_transform.transform_dx, self.panoramic_transform.transform_dy
-        # self.panorama_builder.create_panorama(transform, heatmap)
+        # self.panorama_builder.create_panorama(transform, result)
         # # cv2.imshow("Panorama Heat", self.panorama_builder.panorama)
         # # cv2.waitKey(1)
 
-        self.prev_heat = heatmap
+        self.prev_heat = result
 
-        return heatmap
+        return result

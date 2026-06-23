@@ -28,6 +28,7 @@ class Segmentation:
     label: str
     id: str
     score: float   
+    centroid: tuple[int, int] | None = None
     geo_pos: tuple[float, float, float] | None = None
     
 class Segment():
@@ -43,7 +44,7 @@ class Segment():
         )
 
         overrides = dict(
-            conf=0.3,
+            conf=0.35,
             task="segment",
             mode="predict",
             model="models/sam3.pt",
@@ -111,15 +112,54 @@ class Segment():
 
         return map_x, map_y
 
-    def _create_segmentation(self, mask: np.ndarray, label, score):
+    def _create_segmentation(self, mask: np.ndarray, label, score, centroid=None):
         self.segmentations.append(
             Segmentation(
                 mask=mask,
                 label=label,
                 score=score,
-                id=""
+                id="",
+                centroid=centroid,
             )
         )
+
+    def _xyxy_centroid_to_image(self, xyxy, sam_shape, image_shape):
+        sam_height, sam_width = sam_shape[:2]
+        image_height, image_width = image_shape[:2]
+        scale_x = image_width / sam_width
+        scale_y = image_height / sam_height
+
+        x1, y1, x2, y2 = xyxy
+        cx = int(round(((x1 + x2) / 2) * scale_x))
+        cy = int(round(((y1 + y2) / 2) * scale_y))
+
+        cx = max(0, min(image_width - 1, cx))
+        cy = max(0, min(image_height - 1, cy))
+
+        return cx, cy
+
+    def _to_numpy(self, value):
+        if hasattr(value, "detach"):
+            return value.detach().cpu().numpy()
+        if hasattr(value, "cpu"):
+            return value.cpu().numpy()
+        return np.asarray(value)
+
+    def _remap_centroid(self, centroid, map_x, map_y):
+        if centroid is None:
+            return None
+
+        height, width = map_x.shape[:2]
+        x, y = centroid
+        x = max(0, min(width - 1, int(round(x))))
+        y = max(0, min(height - 1, int(round(y))))
+
+        new_x = int(round(x - (map_x[y, x] - x)))
+        new_y = int(round(y - (map_y[y, x] - y)))
+        new_x = max(0, min(width - 1, new_x))
+        new_y = max(0, min(height - 1, new_y))
+
+        return new_x, new_y
 
     def get_segmentations(self, image, scene_dict):
         image_height, image_width = image.shape[:2]
@@ -137,6 +177,11 @@ class Segment():
                     interpolation=cv2.INTER_NEAREST,
                     borderMode=cv2.BORDER_CONSTANT,
                     borderValue=0
+                )
+                segmentation.centroid = self._remap_centroid(
+                    segmentation.centroid,
+                    map_x,
+                    map_y,
                 )
 
         # Run SAM if this is a SAM step
@@ -159,10 +204,12 @@ class Segment():
         
                     if result.masks is not None:
                         masks = result.masks.data.cpu().numpy()  # (N, H, W)
+                        boxes_xyxy = self._to_numpy(result.boxes.xyxy)
+                        boxes_cls = self._to_numpy(result.boxes.cls).astype(int)
 
                         self.segmentations = []
                         for i in range(len(result.boxes)):
-                            prompt = result.names[int(result.boxes.cls[i])]
+                            prompt = result.names[boxes_cls[i]]
                             if prompt not in prompt_to_label:
                                 continue
 
@@ -173,8 +220,18 @@ class Segment():
 
                             label = prompt_to_label[prompt]
                             score = scene_dict[label]["score"]
+                            centroid = self._xyxy_centroid_to_image(
+                                boxes_xyxy[i],
+                                sam_image.shape,
+                                image.shape,
+                            )
 
-                            self._create_segmentation(mask, label, score)
+                            self._create_segmentation(
+                                mask,
+                                label,
+                                score,
+                                centroid=centroid,
+                            )
 
         self.prev_gray = curr_gray
         return self.segmentations
