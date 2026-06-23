@@ -27,10 +27,12 @@ class Segmentation:
     mask: np.ndarray
     label: str
     id: str
-    score: float   
+    score: float
     centroid: tuple[int, int] | None = None
     geo_pos: tuple[float, float, float] | None = None
-    
+
+
+
 class Segment():
 
     def __init__(self, show_preview=False):

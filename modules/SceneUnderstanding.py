@@ -195,7 +195,7 @@ def debug():
 
         "building": {
             "prompt": "structure, rooftops",
-            "score": 80,
+            "score": 55,
         },
 
         "vehicle": {

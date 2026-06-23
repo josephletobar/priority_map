@@ -1,4 +1,6 @@
 import os
+
+from attr import dataclass
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 
 import argparse
@@ -14,6 +16,7 @@ from scripts.video_helper import (
     safe_imwrite,
     VideoOutput,
 )
+from scripts.cluster_segmentations import cluster_segmentations, ClusteredSegmentation
 
 from modules.SceneUnderstanding import SceneUnderstanding
 from modules.Heatmap import Heatmap
@@ -187,8 +190,10 @@ class DroneHeatmap:
         if segmentations is None:
             segmentations = []
 
-        for segmentation in segmentations:
-            segmentation.geo_pos = None
+        clustered = cluster_segmentations(segmentations)
+
+        # for segmentation in segmentations:
+        #     segmentation.geo_pos = None
             # segmentation.geo_pos = self.geo_localizer.get_location(
             #     image,
             #     segmentation.mask,
@@ -196,7 +201,7 @@ class DroneHeatmap:
             # )
             # cv2.imshow("Segmentation", segmentation.mask.astype(np.uint8) * 255)
 
-        # Set Segmentation Types to Display
+        # Set Segmentation Types to Display MASKS
         mask_frame = None
         if self.masks:
             mask_frame = label_mask(self.masks, image, segmentations)
@@ -204,7 +209,7 @@ class DroneHeatmap:
         # curr_nodes = self.graph_builder.build_graph(segmentations)
     
         # Create Heatmap
-        heatmap = self.heatmap.draw_heatmap(image, segmentations)
+        heatmap = self.heatmap.draw_heatmap(image, clustered)
         # print(f"Frame {frame['frame_index']}:", end=" ")
         # for node_id in self.graph_builder.G.nodes:
         #     print(node_id, end=" ")
