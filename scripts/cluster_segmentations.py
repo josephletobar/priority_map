@@ -10,6 +10,7 @@ class ClusteredSegmentation:
     score: float  # relevance score (same for all in cluster)
     count: int  # number of segmentations merged
     mask: np.ndarray  # merged mask of all clustered segmentations
+    geo_pos: tuple[float, float]  # global position (centroid + accumulated transform)
 
 
 def cluster_segmentations(segmentations, distance_threshold=50):
@@ -55,6 +56,7 @@ def cluster_segmentations(segmentations, distance_threshold=50):
         # Create ClusteredSegmentation for each cluster
         for cluster_segs in clusters_dict.values():
             avg_centroid = tuple(np.mean([seg.centroid for seg in cluster_segs], axis=0).astype(int))
+            avg_geo_pos = tuple(np.mean([seg.geo_pos for seg in cluster_segs if seg.geo_pos is not None], axis=0))
             score = cluster_segs[0].score
             count = len(cluster_segs)
             merged_mask = np.logical_or.reduce([seg.mask for seg in cluster_segs]).astype(np.uint8)
@@ -65,6 +67,7 @@ def cluster_segmentations(segmentations, distance_threshold=50):
                 score=score,
                 count=count,
                 mask=merged_mask,
+                geo_pos=avg_geo_pos,
             ))
 
             

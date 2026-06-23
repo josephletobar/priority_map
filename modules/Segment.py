@@ -115,6 +115,10 @@ class Segment():
         return map_x, map_y
 
     def _create_segmentation(self, mask: np.ndarray, label, score, centroid=None):
+        geo_pos = None
+        if centroid is not None:
+            geo_pos = (centroid[0] + self.transform_dx, centroid[1] + self.transform_dy)
+
         self.segmentations.append(
             Segmentation(
                 mask=mask,
@@ -122,6 +126,7 @@ class Segment():
                 score=score,
                 id="",
                 centroid=centroid,
+                geo_pos=geo_pos,
             )
         )
 
