@@ -37,7 +37,8 @@ def parse_args():
     )
     parser.add_argument(
         "--dataset-root",
-        default=r"D:\Train\Train\query_images",
+        # default=r"D:\Train\Train\query_images",
+        default = r"D:\dronevid2",
         help="Dataset root. Supports plain image folder.",
     )
     parser.add_argument("--task", default="Find cars")
@@ -193,6 +194,16 @@ class DroneHeatmap:
 
         clustered = cluster_segmentations(segmentations)
 
+        # Set Segmentation Types to Display MASKS
+        mask_frame = None
+        if self.masks:
+            mask_frame = label_mask(self.masks, image, segmentations)
+
+        # Create Heatmap
+        heatmap = self.heatmap.draw_heatmap(image, clustered)
+        if heatmap is not None:
+            out = heatmap
+
         if scene_dict is not None:
             self.graph_builder.add_nodes(clustered)
             if self.show:
@@ -200,26 +211,6 @@ class DroneHeatmap:
                 if self.graph_builder.last_2d_frame is not None:
                     cv2.imshow("2D Graph", self.graph_builder.last_2d_frame)
                     cv2.waitKey(1)
-
-        # for segmentation in segmentations:
-        #     segmentation.geo_pos = None
-            # segmentation.geo_pos = self.geo_localizer.get_location(
-            #     image,
-            #     segmentation.mask,
-            #     position
-            # )
-            # cv2.imshow("Segmentation", segmentation.mask.astype(np.uint8) * 255)
-
-        # Set Segmentation Types to Display MASKS
-        mask_frame = None
-        if self.masks:
-            mask_frame = label_mask(self.masks, image, segmentations)
-
-    
-        # Create Heatmap
-        heatmap = self.heatmap.draw_heatmap(image, clustered)
-        if heatmap is not None:
-            out = heatmap
 
         # Commented out Panorama block for debugging now 
         # # Create Panoramic Images

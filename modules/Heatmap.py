@@ -88,6 +88,8 @@ class Heatmap:
 
             color = tuple(int(c) for c in heatmap[y, x])
 
+            segmentation.color = color  # Store the color in the segmentation object
+
             cv2.circle(
                 output,  # image
                 (x, y),  # center

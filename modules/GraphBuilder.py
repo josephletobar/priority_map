@@ -9,7 +9,7 @@ from pathlib import Path
 
 class GraphBuilder:
     MATCH_DISTANCE_THRESHOLD = 200 # pixels
-    EDGE_THRESHOLD = 200 # pixels
+    EDGE_THRESHOLD = 600 # pixels
 
     def __init__(self, output_dir):
         self.output_dir = Path(output_dir)
@@ -33,7 +33,10 @@ class GraphBuilder:
                 score REAL NOT NULL,
                 count INTEGER NOT NULL,
                 geo_pos_x REAL NOT NULL,
-                geo_pos_y REAL NOT NULL
+                geo_pos_y REAL NOT NULL,
+                color_b INTEGER,
+                color_g INTEGER,
+                color_r INTEGER
             )
         ''')
 
@@ -99,11 +102,13 @@ class GraphBuilder:
 
             node_id = self._next_node_id(base_label)
 
+            color = getattr(seg, 'color', None) or (0, 0, 0)
             self.cursor.execute('''
                 INSERT OR REPLACE INTO nodes
-                (id, label, score, count, geo_pos_x, geo_pos_y)
-                VALUES (?, ?, ?, ?, ?, ?)
-            ''', (node_id, seg.label, seg.score, seg.count, float(x), float(y)))
+                (id, label, score, count, geo_pos_x, geo_pos_y, color_b, color_g, color_r)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (node_id, seg.label, seg.score, seg.count, float(x), float(y),
+                  int(color[0]), int(color[1]), int(color[2])))
 
             new_node_ids.append((node_id, x, y))
 
@@ -128,8 +133,8 @@ class GraphBuilder:
 
     def _get_all_nodes_and_edges(self):
         """Query all nodes and edges for visualization"""
-        self.cursor.execute('SELECT id, geo_pos_x, geo_pos_y, score FROM nodes')
-        nodes = {row[0]: {'pos': (row[1], row[2]), 'score': row[3]} for row in self.cursor.fetchall()}
+        self.cursor.execute('SELECT id, geo_pos_x, geo_pos_y, score, color_b, color_g, color_r FROM nodes')
+        nodes = {row[0]: {'pos': (row[1], row[2]), 'score': row[3], 'color': (row[4], row[5], row[6])} for row in self.cursor.fetchall()}
 
         self.cursor.execute('SELECT source_id, target_id, weight FROM edges')
         edges = [(row[0], row[1], row[2]) for row in self.cursor.fetchall()]
@@ -142,45 +147,29 @@ class GraphBuilder:
         if not nodes_data:
             return None
 
-        # print(f"Drawing graph: {len(nodes_data)} nodes, {len(edges)} edges")
-        # for src, dst, weight in edges:
-        #     print(f"  Edge: {src}-{dst} weight {weight:.1f}")
-
         G = nx.Graph()
         G.add_nodes_from(nodes_data.keys())
         G.add_weighted_edges_from([(src, dst, w) for src, dst, w in edges])
 
-        fig, ax = plt.subplots()
+        if len(G.edges()) > 0:
+            G = nx.minimum_spanning_tree(G, weight='weight')
+
+        fig, ax = plt.subplots(figsize=(8, 6))
 
         pos = {node_id: data['pos'] for node_id, data in nodes_data.items()}
         node_sizes = [(nodes_data[node_id]['score'] + 5) * 10 for node_id in G.nodes()]
-        node_colors = [nodes_data[node_id]['score'] for node_id in G.nodes()]
+        node_colors = [tuple(c / 255.0 for c in nodes_data[node_id]['color'][::-1]) for node_id in G.nodes()]
+        node_labels = {node_id: node_id.split('_')[0] for node_id in G.nodes()}
 
         nx.draw(
             G,
             pos,
             ax=ax,
+            labels=node_labels,
             with_labels=True,
             node_size=node_sizes,
             node_color=node_colors,
-            cmap=plt.cm.jet,
         )
-
-        for src, dst, weight in edges:
-            if src not in pos or dst not in pos:
-                continue
-
-            x1, y1 = pos[src]
-            x2, y2 = pos[dst]
-            ax.text(
-                (x1 + x2) / 2,
-                (y1 + y2) / 2,
-                f"{weight:.1f}",
-                fontsize=8,
-                ha="center",
-                va="center",
-                bbox={"facecolor": "white", "edgecolor": "none", "alpha": 0.7},
-            )
 
         fig.canvas.draw()
         rgba = np.asarray(fig.canvas.buffer_rgba())
