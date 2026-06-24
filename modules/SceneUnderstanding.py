@@ -27,7 +27,7 @@ class SceneUnderstanding:
                 self.vocabulary[label] = score
             else:
                 new_score = self.vocabulary_alpha * score + (1 - self.vocabulary_alpha) * self.vocabulary[label]
-                self.vocabulary[label] = new_score
+                self.vocabulary[label] = score
 
             updated_dict[label] = {
                 "prompt": label_info.get("prompt", []),
@@ -171,7 +171,7 @@ class SceneUnderstanding:
 
     def get_labels(self, image: np.ndarray, task: str):
 
-        return debug()
+        # return debug()
 
         scene_dict = self._vlm_inference(image, task)
         scene_dict = self._update_vocabulary(scene_dict)

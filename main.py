@@ -64,7 +64,7 @@ class DroneHeatmap:
         task="Find cars",
         debrief="debrief.txt",
         mask=None,
-        sam_step=30,
+        sam_step=45,
         show=False,
         record=False,
         panoramic=False,
