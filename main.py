@@ -38,7 +38,7 @@ def parse_args():
     parser.add_argument(
         "--dataset-root",
         # default=r"D:\Train\Train\query_images",
-        default = r"D:\dronevid2",
+        default = r"C:\Users\jletobar3\Projects\dronevid2",
         help="Dataset root. Supports plain image folder.",
     )
     parser.add_argument("--task", default="Find cars")
@@ -237,7 +237,7 @@ class DroneHeatmap:
             # Heatmap overlay panorama
             heat_panorama = self.heat_panoramic_builder.create_panorama(transform, heatmap_only)
             if heat_panorama is not None:
-                heat_panorama = cv2.GaussianBlur(heat_panorama, (201, 41), 0)
+                heat_panorama = cv2.GaussianBlur(heat_panorama, (21, 401), 0)
                 heat_panorama = cv2.addWeighted(
                     panorama,    # base panorama
                     0.6,      # weight of base image
