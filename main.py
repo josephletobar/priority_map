@@ -16,7 +16,7 @@ from scripts.video_helper import (
     safe_imwrite,
     VideoOutput,
 )
-from scripts.cluster_segmentations import cluster_segmentations, ClusteredSegmentation
+from scripts.cluster_segmentations import cluster_segmentations, ClusteredSegmentation, semantic_clustering
 
 from modules.SceneUnderstanding import SceneUnderstanding
 from modules.Heatmap import Heatmap
@@ -64,7 +64,7 @@ class DroneHeatmap:
         task="Find cars",
         debrief="debrief.txt",
         mask=None,
-        sam_step=45,
+        sam_step=60,
         show=False,
         record=False,
         panoramic=False,
@@ -229,8 +229,10 @@ class DroneHeatmap:
         if heatmap_text is not None and heatmap_only is not None:
             out = heatmap_text
 
+        semantic_clusters = semantic_clustering(clustered) # cluster after colors have been assigned
+
         if scene_dict is not None:
-            self.graph_builder.add_nodes(clustered)
+            self.graph_builder.add_nodes(semantic_clusters) # using high level semantic clusters for graph building TODO: make heirarchical DB
             graph_frame = self.graph_builder.render_2d_graph_frame()
             if graph_frame is not None:
                 self.last_graph_frame = graph_frame

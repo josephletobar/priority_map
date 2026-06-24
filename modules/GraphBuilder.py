@@ -101,7 +101,7 @@ class GraphBuilder:
         
 
         for seg in clustered_segmentations:
-            base_label = seg.label.rstrip('s')
+            base_label = seg.label
             x, y = seg.geo_pos
 
             match = self._find_matching_node(base_label, x, y)
