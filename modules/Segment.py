@@ -41,7 +41,7 @@ class Segment():
         )
 
         overrides = dict(
-            conf=0.35,
+            conf=0.25,
             task="segment",
             mode="predict",
             model="models/sam3.pt",

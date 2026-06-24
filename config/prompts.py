@@ -29,7 +29,7 @@ Scoring guide:
 - 25 = weak context
 - 50 = useful
 - 75 = highly useful
-- 100 = directly mission-critical
+- 100 = directly mission-critical, or the task itself
 
 Rules:
 - Include all major visible categories

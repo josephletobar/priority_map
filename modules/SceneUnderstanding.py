@@ -4,6 +4,7 @@ import base64
 import json
 import re
 import time
+from collections import deque
 from openai import OpenAI
 from config.prompts import GPT_VISION_PROMPT
 
@@ -11,18 +12,42 @@ class SceneUnderstanding:
     def __init__(self):
         self.client = OpenAI()
         self.vocabulary = {}
-        self.vocabulary_alpha = 0.15
+        self.vocabulary_alpha = 0.90
+        self.scene_history = deque(maxlen=3)
+        self.current_scene_dict = {}
 
 
     def _update_vocabulary(self, scene_dict):
+        # Update vocabulary with EMA'd scores and return scene_dict with smoothed scores
+        updated_dict = {}
         for label, label_info in scene_dict.items():
             score = float(label_info["score"])
-            
+
             if label not in self.vocabulary:
                 self.vocabulary[label] = score
             else:
                 new_score = self.vocabulary_alpha * score + (1 - self.vocabulary_alpha) * self.vocabulary[label]
                 self.vocabulary[label] = new_score
+
+            updated_dict[label] = {
+                "prompt": label_info.get("prompt", []),
+                "score": self.vocabulary[label]
+            }
+
+        return updated_dict
+
+    def _merge_scene_dicts(self, current_dict):
+        # Merge current scene with last 3, keeping most recent scores when labels overlap
+        merged = {}
+        for scene_dict in self.scene_history:
+            for label, score in scene_dict.items():
+                if label not in merged:
+                    merged[label] = score
+
+        for label, score in current_dict.items():
+            merged[label] = score
+
+        return merged
 
     def _loads_json_object(self, text):
         text = text.strip()
@@ -103,11 +128,8 @@ class SceneUnderstanding:
             }
 
         return normalized
-
-    def get_labels(self, image: np.ndarray, task: str):
-
-        # return debug()
-
+    
+    def _vlm_inference(self, image, task):
         image = cv2.resize(
             image,
             (512, 512),
@@ -124,7 +146,7 @@ class SceneUnderstanding:
 
         start = time.perf_counter()
         response = self.client.responses.create(
-            model="gpt-4.1-mini",
+            model="gpt-5.4",
             input=[{
                 "role": "user",
                 "content": [
@@ -141,15 +163,24 @@ class SceneUnderstanding:
         print(f"\nGPT Vision inference time: {end - start:.2f} seconds")
 
         text = response.output_text
-        # print(text)
+        print(text)
 
         scene_dict = self._normalize_scene_dict(self._loads_json_object(text))
 
-        self._update_vocabulary(scene_dict)
-        
-        print(self.vocabulary)
-
         return scene_dict
+
+    def get_labels(self, image: np.ndarray, task: str):
+
+        # return debug()
+
+        scene_dict = self._vlm_inference(image, task)
+        scene_dict = self._update_vocabulary(scene_dict)
+        merged_dict = self._merge_scene_dicts(scene_dict)
+        self.scene_history.append(scene_dict)
+
+        # print(self.vocabulary)
+
+        return merged_dict
         
 
 def debug():

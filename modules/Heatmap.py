@@ -7,7 +7,7 @@ HEATMAP_PROCESS_SCALE = 1
 
 class Heatmap:
     def __init__(self):
-        self.heat_gamma = 10.0
+        self.heat_gamma = 5.0
 
         self.BLUR_SPREAD = 53.0
 
@@ -38,33 +38,39 @@ class Heatmap:
             )
             score = region.score
 
-            boosted_score = (score / 100) ** self.heat_gamma
+            # boosted_score = (score / 100) ** self.heat_gamma
+
+            # heatmap = np.maximum(
+            #     heatmap,
+            #     mask * boosted_score
+            # )
+
+            # valid = np.maximum(
+            #     valid,
+            #     mask
+            # )
 
             heatmap = np.maximum(
                 heatmap,
-                mask * boosted_score
-            )
-
-            valid = np.maximum(
-                valid,
-                mask
+                mask * score
             )
 
         spread_size = max(3, int(self.BLUR_SPREAD * HEATMAP_PROCESS_SCALE / 15))
         if spread_size % 2 == 0:
             spread_size += 1
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (spread_size, spread_size))
 
-        decay = 0.95
-        for _ in range(15):
-            heatmap = cv2.dilate(heatmap, kernel, iterations=1)
-            heatmap = heatmap * decay
+        kernel = cv2.getStructuringElement(
+            cv2.MORPH_ELLIPSE,
+            (spread_size, spread_size)
+        )
 
-        heatmap = cv2.GaussianBlur(heatmap, (201, 201), 0)
-        heatmap = np.power(heatmap, 1 / self.heat_gamma) * 100
+        heatmap = cv2.dilate(heatmap, kernel, iterations=150)
+
+        heatmap = cv2.GaussianBlur(heatmap, (401, 401), 0)
 
         heatmap = np.clip(heatmap, 0, 100)
         heatmap = (heatmap * 2.55).astype(np.uint8)
+        
 
         heatmap_colored = cv2.applyColorMap(heatmap, cv2.COLORMAP_JET)
         heatmap_resized = cv2.resize(heatmap_colored, (w, h), interpolation=cv2.INTER_LINEAR)
