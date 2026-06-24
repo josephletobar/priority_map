@@ -46,6 +46,7 @@ def parse_args():
     parser.add_argument("--mask", nargs="*", default=[])
     parser.add_argument("--show", action="store_true")
     parser.add_argument("--record", action="store_true")
+    parser.add_argument("--panoramic", action="store_true")
     return parser.parse_args()
 
 
@@ -59,12 +60,14 @@ class DroneHeatmap:
         sam_step=15,
         show=False,
         record=False,
+        panoramic=False,
     ):
         self.dataset_root = Path(dataset_root)
         self.task = task
         self.debrief = debrief
         self.masks = mask or []
         self.sam_step = sam_step
+        self.panoramic = panoramic
         
         self.query_csv, self.query_images_dir = self._load_dataset_index()
 
@@ -85,7 +88,7 @@ class DroneHeatmap:
         )
 
         self.heat_panoramic_builder = PanoramaBuilder(alpha=0.9)
-        self.panoramic_builder = PanoramaBuilder(alpha=0.5)
+        self.panoramic_builder = PanoramaBuilder(alpha=0.15)
         self.show = show
         self.last_graph_frame = None
 
@@ -204,9 +207,9 @@ class DroneHeatmap:
             mask_frame = label_mask(self.masks, image, segmentations)
 
         # Create Heatmap
-        heatmap = self.heatmap.draw_heatmap(image, clustered)
-        if heatmap is not None:
-            out = heatmap
+        heatmap_text, heatmap_only = self.heatmap.draw_heatmap(image, clustered)
+        if heatmap_text is not None and heatmap_only is not None:
+            out = heatmap_text
 
         if scene_dict is not None:
             self.graph_builder.add_nodes(clustered)
@@ -219,27 +222,34 @@ class DroneHeatmap:
             graph_resized = cv2.resize(self.last_graph_frame, (int(self.last_graph_frame.shape[1] * heatmap_height / self.last_graph_frame.shape[0]), heatmap_height))
             out = cv2.hconcat([out, graph_resized])
 
-        # Commented out Panorama block for debugging now 
-        # # Create Panoramic Images
-        # os.makedirs(f"{self.output_dir}/heat_panorama", exist_ok=True)
-        # os.makedirs(f"{self.output_dir}/panorama", exist_ok=True)
-        # transform = self.segmentation.transform_dx, self.segmentation.transform_dy
+        # Create Panoramic Images
+        if self.panoramic:
+            panorama_save = 10
+            os.makedirs(f"{self.output_dir}/heat_panorama", exist_ok=True)
+            os.makedirs(f"{self.output_dir}/panorama", exist_ok=True)
+            transform = self.segmentation.transform_dx, self.segmentation.transform_dy
 
-        # heat_panorama = self.heat_panoramic_builder.create_panorama(transform, heatmap)
-        # # cv2.imshow("Heat Panorama", self.heat_panoramic_builder.panorama)
-        # # cv2.waitKey(1)
-        # if self.index % 10 == 0:
-        #     safe_imwrite(
-        #         f"{self.output_dir}/heat_panorama/heat_panorama_{self.index}.png",
-        #         heat_panorama,
-        #     )
+            # Base image panorama
+            panorama = self.panoramic_builder.create_panorama(transform, image)
+            if self.index % panorama_save == 0:
+                safe_imwrite(f"{self.output_dir}/panorama/panorama_{self.index}.png", panorama)
 
-        # panorama = self.panoramic_builder.create_panorama(transform, image)
-        # # cv2.imshow("Panorama", self.panoramic_builder.panorama)
-        # # cv2.waitKey(1)
-        # if self.index % 10 == 0:
-        #     safe_imwrite(f"{self.output_dir}/panorama/panorama_{self.index}.png", panorama)
+            # Heatmap overlay panorama
+            heat_panorama = self.heat_panoramic_builder.create_panorama(transform, heatmap_only)
+            if heat_panorama is not None:
+                heat_panorama = cv2.GaussianBlur(heat_panorama, (201, 41), 0)
+                heat_panorama = cv2.addWeighted(
+                    panorama,    # base panorama
+                    0.6,      # weight of base image
+                    heat_panorama,  # heatmap color overlay
+                    0.4,      # weight of heatmap
+                    0         # constant brightness offset added to every pixel
+                )
+                if self.index % panorama_save == 0:
+                    safe_imwrite(f"{self.output_dir}/heat_panorama/heat_panorama_{self.index}.png", heat_panorama)
 
+
+        # Write Output Frame To Video
         return self.video_output.handle_frame(
             out,
             header=f"Task: {self.task}",
@@ -268,6 +278,7 @@ def main():
         mask=args.mask,
         show=args.show,
         record=args.record,
+        panoramic=args.panoramic,
     )
 
     try:

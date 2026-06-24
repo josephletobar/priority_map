@@ -123,7 +123,7 @@ class Heatmap:
                 segmentation.label,  # text
                 (x + 6, y - 6),  # position
                 cv2.FONT_HERSHEY_SIMPLEX,  # font
-                1.25 * float(segmentation.score/100),  # scaled according to relevance
+                1.25 * float((segmentation.score+10)/100),  # scaled according to relevance
                 color,  # BGR color from heatmap
                 2 if segmentation.score > 50 else 1,  # thickness
                 cv2.LINE_AA,  # antialiased
@@ -133,14 +133,14 @@ class Heatmap:
 
     def draw_heatmap(self, image, segmentations):
 
-        heatmap_overlaid, heatmap_colored = self._create_heatmap(image, segmentations)
-        result = self._draw_segmentation_labels(heatmap_overlaid, heatmap_colored, segmentations)
+        heatmap_overlay, heatmap_only = self._create_heatmap(image, segmentations)
+        heatmap_text = self._draw_segmentation_labels(heatmap_overlay, heatmap_only, segmentations)
 
         # transform = self.panoramic_transform.transform_dx, self.panoramic_transform.transform_dy
         # self.panorama_builder.create_panorama(transform, result)
         # # cv2.imshow("Panorama Heat", self.panorama_builder.panorama)
         # # cv2.waitKey(1)
 
-        self.prev_heat = result
+        self.prev_heat = heatmap_text
 
-        return result
+        return heatmap_text, heatmap_only
