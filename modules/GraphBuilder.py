@@ -36,9 +36,17 @@ class GraphBuilder:
                 geo_pos_y REAL NOT NULL,
                 color_b INTEGER,
                 color_g INTEGER,
-                color_r INTEGER
+                color_r INTEGER,
+                agent_reviewed INTEGER NOT NULL DEFAULT 0
             )
         ''')
+
+        self.cursor.execute('PRAGMA table_info(nodes)')
+        node_columns = {row[1] for row in self.cursor.fetchall()}
+        if 'agent_reviewed' not in node_columns:
+            self.cursor.execute(
+                'ALTER TABLE nodes ADD COLUMN agent_reviewed INTEGER NOT NULL DEFAULT 0'
+            )
 
         self.cursor.execute('''
             CREATE TABLE IF NOT EXISTS edges (
@@ -105,8 +113,8 @@ class GraphBuilder:
             color = getattr(seg, 'color', None) or (0, 0, 0)
             self.cursor.execute('''
                 INSERT OR REPLACE INTO nodes
-                (id, label, score, count, geo_pos_x, geo_pos_y, color_b, color_g, color_r)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (id, label, score, count, geo_pos_x, geo_pos_y, color_b, color_g, color_r, agent_reviewed)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
             ''', (node_id, seg.label, seg.score, seg.count, float(x), float(y),
                   int(color[0]), int(color[1]), int(color[2])))
 

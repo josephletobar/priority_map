@@ -171,7 +171,7 @@ class SceneUnderstanding:
 
     def get_labels(self, image: np.ndarray, task: str):
 
-        # return debug()
+        return debug()
 
         scene_dict = self._vlm_inference(image, task)
         scene_dict = self._update_vocabulary(scene_dict)

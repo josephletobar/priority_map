@@ -22,6 +22,7 @@ from modules.SceneUnderstanding import SceneUnderstanding
 from modules.Heatmap import Heatmap
 from modules.Segment import Segment
 from modules.GraphBuilder import GraphBuilder
+from modules.GraphAgent import GraphAgent
 # from modules.GraphChat import ChatWithGraph
 from modules.GeoLocalizer import GeoLocalizer
 from modules.PanoramaBuilder import PanoramaBuilder
@@ -37,8 +38,8 @@ def parse_args():
     )
     parser.add_argument(
         "--dataset-root",
-        # default=r"D:\Train\Train\query_images",
-        default = r"C:\Users\jletobar3\Projects\dronevid2",
+        default=r"D:\Train\Train\query_images",
+        # default = r"C:\Users\jletobar3\Projects\dronevid2",
         help="Dataset root. Supports plain image folder.",
     )
     parser.add_argument("--task", default="Find cars")
@@ -54,10 +55,10 @@ class DroneHeatmap:
     def __init__(
         self,
         dataset_root: str,
-        task="Find vehcles",
+        task="Find cars",
         debrief="debrief.txt",
         mask=None,
-        sam_step=15,
+        sam_step=30,
         show=False,
         record=False,
         panoramic=False,
@@ -78,6 +79,7 @@ class DroneHeatmap:
         self.scene_understanding = SceneUnderstanding()
         self.segmentation = Segment(show_preview=show)
         self.graph_builder = GraphBuilder(output_dir=self.output_dir)
+        self.graph_agent = GraphAgent(self.graph_builder, f"{self.task}: {self.debrief}")
         self.heatmap = Heatmap()
         self.geo_localizer = GeoLocalizer()
         self.masks = {m.lower() for m in self.masks}
@@ -216,6 +218,9 @@ class DroneHeatmap:
             graph_frame = self.graph_builder.render_2d_graph_frame()
             if graph_frame is not None:
                 self.last_graph_frame = graph_frame
+
+            if self.graph_agent.should_run():
+                self.graph_agent.update_priorities()
 
         if self.last_graph_frame is not None and out is not None:
             heatmap_height = out.shape[0]
