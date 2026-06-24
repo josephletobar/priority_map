@@ -48,6 +48,12 @@ def parse_args():
     parser.add_argument("--show", action="store_true")
     parser.add_argument("--record", action="store_true")
     parser.add_argument("--panoramic", action="store_true")
+    parser.add_argument(
+        "--graph_agent",
+        "--graph-agent",
+        action="store_true",
+        help="Enable the asynchronous graph agent. Off by default.",
+    )
     return parser.parse_args()
 
 
@@ -62,6 +68,7 @@ class DroneHeatmap:
         show=False,
         record=False,
         panoramic=False,
+        graph_agent=False,
     ):
         self.dataset_root = Path(dataset_root)
         self.task = task
@@ -79,7 +86,11 @@ class DroneHeatmap:
         self.scene_understanding = SceneUnderstanding()
         self.segmentation = Segment(show_preview=show)
         self.graph_builder = GraphBuilder(output_dir=self.output_dir)
-        self.graph_agent = GraphAgent(self.graph_builder, f"{self.task}: {self.debrief}")
+        self.graph_agent = (
+            GraphAgent(self.graph_builder, f"{self.task}: {self.debrief}")
+            if graph_agent
+            else None
+        )
         self.heatmap = Heatmap()
         self.geo_localizer = GeoLocalizer()
         self.masks = {m.lower() for m in self.masks}
@@ -173,10 +184,15 @@ class DroneHeatmap:
         return None
     
     def close_video(self):
+        if self.graph_agent is not None:
+            self.graph_agent.close()
         self.video_output.close()
         self.graph_builder.close()
 
     def run_frame(self):
+        if self.graph_agent is not None:
+            self.graph_agent.poll_finished()
+
         frame = self.get_next_frame()
         if frame is None:
             return False
@@ -219,8 +235,8 @@ class DroneHeatmap:
             if graph_frame is not None:
                 self.last_graph_frame = graph_frame
 
-            if self.graph_agent.should_run():
-                self.graph_agent.update_priorities()
+            if self.graph_agent is not None:
+                self.graph_agent.start_async_if_ready()
 
         if self.last_graph_frame is not None and out is not None:
             heatmap_height = out.shape[0]
@@ -284,6 +300,7 @@ def main():
         show=args.show,
         record=args.record,
         panoramic=args.panoramic,
+        graph_agent=args.graph_agent,
     )
 
     try:

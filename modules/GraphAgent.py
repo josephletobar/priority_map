@@ -1,6 +1,8 @@
 import json
 import os
 import time
+from concurrent.futures import ThreadPoolExecutor
+
 import requests
 import networkx as nx
 from config.prompts import GRAPH_AGENT_PROMPT
@@ -12,16 +14,20 @@ class GraphAgent:
         graph_builder,
         task_description,
         node_growth_threshold=30,
+        review_hop_cutoff=1,
         model=None,
     ):
         self.graph_builder = graph_builder
         self.task_description = task_description
         self.node_growth_threshold = node_growth_threshold
+        self.review_hop_cutoff = int(os.getenv("GRAPH_AGENT_REVIEW_HOP_CUTOFF", review_hop_cutoff))
         self.model = model or os.getenv("GRAPH_AGENT_MODEL", "phi4-mini-reasoning")
         self.ollama_url = os.getenv("OLLAMA_GENERATE_URL", "http://localhost:11434/api/generate")
         self.keep_alive = os.getenv("GRAPH_AGENT_KEEP_ALIVE", "0")
         self.num_ctx = int(os.getenv("GRAPH_AGENT_NUM_CTX", "4096"))
         self.timeout = int(os.getenv("GRAPH_AGENT_TIMEOUT", "120"))
+        self.executor = ThreadPoolExecutor(max_workers=1)
+        self.future = None
 
     def should_run(self):
         """Check if enough unreviewed nodes exist to trigger reasoning."""
@@ -53,7 +59,11 @@ class GraphAgent:
         eligible_node_ids = set(unreviewed_nodes)
         for node_id in unreviewed_nodes:
             eligible_node_ids.update(
-                nx.single_source_shortest_path_length(G, node_id, cutoff=2).keys()
+                nx.single_source_shortest_path_length(
+                    G,
+                    node_id,
+                    cutoff=self.review_hop_cutoff
+                ).keys()
             )
 
         eligible_nodes = {
@@ -108,6 +118,18 @@ class GraphAgent:
             nodes_text=graph_json
         )
 
+    def _prepare_run(self):
+        """Build prompt and remember which nodes this run is allowed to mark."""
+        all_nodes, edges = self._get_context()
+        if all_nodes is None:
+            return None
+
+        prompt = self._build_prompt(all_nodes, edges)
+        return {
+            "prompt": prompt,
+            "node_ids": list(all_nodes.keys()),
+        }
+
     def _mark_reviewed(self, node_ids):
         """Mark prompted nodes as reviewed after a successful model response."""
         if not node_ids:
@@ -119,6 +141,64 @@ class GraphAgent:
             [(node_id,) for node_id in node_ids]
         )
         self.graph_builder.conn.commit()
+
+    def is_running(self):
+        return self.future is not None and not self.future.done()
+
+    def _run_model(self, prompt, node_ids):
+        """Run the slow model request off the main thread."""
+        start_time = time.time()
+        response, raw_output = self._call_local_model(prompt)
+        elapsed = time.time() - start_time
+        return {
+            "response": response,
+            "raw_output": raw_output,
+            "elapsed": elapsed,
+            "node_ids": node_ids,
+        }
+
+    def start_async_if_ready(self):
+        """Start a background graph-agent run if the worker is free and ready."""
+        if self.is_running() or not self.should_run():
+            return False
+
+        run = self._prepare_run()
+        if run is None:
+            return False
+
+        self.future = self.executor.submit(
+            self._run_model,
+            run["prompt"],
+            run["node_ids"],
+        )
+        print(f"\n=== Graph Agent ===")
+        print(f"Model: {self.model}")
+        print(f"Started async inference for {len(run['node_ids'])} node(s)")
+        print(f"=== End Graph Agent ===\n")
+        return True
+
+    def poll_finished(self):
+        """Apply a finished async result on the main thread."""
+        if self.future is None or not self.future.done():
+            return False
+
+        try:
+            result = self.future.result()
+        except Exception as e:
+            print(f"\n=== Graph Agent ===")
+            print(f"Async error: {e}")
+            print(f"=== End Graph Agent ===\n")
+            self.future = None
+            return True
+
+        self.future = None
+        self._handle_model_result(
+            result["response"],
+            result["raw_output"],
+            result["elapsed"],
+            result["node_ids"],
+        )
+        return True
 
     def _call_local_model(self, prompt):
         """Call the configured Ollama model and return parsed JSON."""
@@ -205,18 +285,8 @@ class GraphAgent:
         self.graph_builder.conn.commit()
         return changes
 
-    def update_priorities(self):
-        """Main agent loop: get context, prompt LLM, update scores."""
-        all_nodes, edges = self._get_context()
-        if all_nodes is None:
-            return
-
-        prompt = self._build_prompt(all_nodes, edges)
-
-        start_time = time.time()
-        response, raw_output = self._call_local_model(prompt)
-        elapsed = time.time() - start_time
-
+    def _handle_model_result(self, response, raw_output, elapsed, node_ids):
+        """Apply model output to SQLite. Must run on the main thread."""
         print(f"\n=== Graph Agent ===")
         print(f"Model: {self.model}")
         print(f"Inference time: {elapsed:.2f} seconds\n")
@@ -232,7 +302,7 @@ class GraphAgent:
 
         updates = response.get("updates", [])
         changes = self._update_scores(updates)
-        self._mark_reviewed(all_nodes.keys())
+        self._mark_reviewed(node_ids)
 
         if changes:
             for node_id, old, new in changes:
@@ -241,3 +311,26 @@ class GraphAgent:
             print(f"Updates: None")
 
         print(f"=== End Graph Agent ===\n")
+
+    def update_priorities(self):
+        """Synchronous graph-agent run for compatibility."""
+        run = self._prepare_run()
+        if run is None:
+            return
+
+        start_time = time.time()
+        response, raw_output = self._call_local_model(run["prompt"])
+        elapsed = time.time() - start_time
+        self._handle_model_result(response, raw_output, elapsed, run["node_ids"])
+
+    def close(self):
+        """Drain any running async job before shutdown."""
+        if self.future is not None:
+            if not self.future.done():
+                print("\n=== Graph Agent ===")
+                print("Waiting for async inference to finish before shutdown")
+                print("=== End Graph Agent ===\n")
+            while self.future is not None and not self.future.done():
+                time.sleep(0.1)
+            self.poll_finished()
+        self.executor.shutdown(wait=True)
