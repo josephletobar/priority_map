@@ -31,26 +31,17 @@ class GraphAgent:
 
     def should_run(self):
         """Check if enough unreviewed nodes exist to trigger reasoning."""
-        cursor = self.graph_builder.cursor
-        cursor.execute('SELECT COUNT(*) FROM nodes WHERE agent_reviewed = 0')
-        unreviewed_node_count = cursor.fetchone()[0]
-
+        unreviewed_node_count = self.graph_builder.count_unreviewed_nodes()
         return unreviewed_node_count >= self.node_growth_threshold
 
     def _get_context(self):
         """Query eligible nodes and return MST edges for minimal spatial structure."""
-        cursor = self.graph_builder.cursor
-
-        cursor.execute('SELECT id, score, agent_reviewed FROM nodes')
-        rows = cursor.fetchall()
+        rows, edges, view = self.graph_builder.get_agent_graph_data()
         all_nodes = {row[0]: row[1] for row in rows}
         unreviewed_nodes = {row[0] for row in rows if row[2] == 0}
 
         if not all_nodes or not unreviewed_nodes:
-            return None, None
-
-        cursor.execute('SELECT source_id, target_id, weight FROM edges')
-        edges = cursor.fetchall()
+            return None, None, view
 
         G = nx.Graph()
         G.add_nodes_from(all_nodes.keys())
@@ -78,7 +69,7 @@ class GraphAgent:
             mst = nx.minimum_spanning_tree(eligible_graph, weight='weight')
             mst_edges = [(u, v, d['weight']) for u, v, d in mst.edges(data=True)]
 
-        return eligible_nodes, mst_edges
+        return eligible_nodes, mst_edges, view
 
     def _build_prompt(self, all_nodes, edges):
         """Build LLM prompt with eligible nodes and MST edges."""
@@ -120,7 +111,7 @@ class GraphAgent:
 
     def _prepare_run(self):
         """Build prompt and remember which nodes this run is allowed to mark."""
-        all_nodes, edges = self._get_context()
+        all_nodes, edges, view = self._get_context()
         if all_nodes is None:
             return None
 
@@ -128,24 +119,17 @@ class GraphAgent:
         return {
             "prompt": prompt,
             "node_ids": list(all_nodes.keys()),
+            "view": view,
         }
 
-    def _mark_reviewed(self, node_ids):
+    def _mark_reviewed(self, node_ids, view):
         """Mark prompted nodes as reviewed after a successful model response."""
-        if not node_ids:
-            return
-
-        cursor = self.graph_builder.cursor
-        cursor.executemany(
-            'UPDATE nodes SET agent_reviewed = 1 WHERE id = ?',
-            [(node_id,) for node_id in node_ids]
-        )
-        self.graph_builder.conn.commit()
+        self.graph_builder.mark_agent_reviewed(node_ids, view=view)
 
     def is_running(self):
         return self.future is not None and not self.future.done()
 
-    def _run_model(self, prompt, node_ids):
+    def _run_model(self, prompt, node_ids, view):
         """Run the slow model request off the main thread."""
         start_time = time.time()
         response, raw_output = self._call_local_model(prompt)
@@ -155,6 +139,7 @@ class GraphAgent:
             "raw_output": raw_output,
             "elapsed": elapsed,
             "node_ids": node_ids,
+            "view": view,
         }
 
     def start_async_if_ready(self):
@@ -170,6 +155,7 @@ class GraphAgent:
             self._run_model,
             run["prompt"],
             run["node_ids"],
+            run["view"],
         )
         print(f"\n=== Graph Agent ===")
         print(f"Model: {self.model}")
@@ -197,6 +183,7 @@ class GraphAgent:
             result["raw_output"],
             result["elapsed"],
             result["node_ids"],
+            result["view"],
         )
         return True
 
@@ -237,12 +224,11 @@ class GraphAgent:
         except Exception as e:
             return None, str(e)
 
-    def _update_scores(self, updates):
+    def _update_scores(self, updates, view):
         """Apply score deltas and update colors in SQLite."""
         if not updates:
             return []
 
-        cursor = self.graph_builder.cursor
         changes = []
 
         for update in updates:
@@ -255,37 +241,15 @@ class GraphAgent:
             if not node_id or delta is None:
                 continue
 
-            cursor.execute(
-                'SELECT score, color_b, color_g, color_r FROM nodes WHERE id = ?',
-                (node_id,)
-            )
-            row = cursor.fetchone()
-            if not row:
+            result = self.graph_builder.apply_score_delta(node_id, delta, view=view)
+            if result is None:
                 continue
-
-            old_score, old_b, old_g, old_r = row
-            try:
-                delta = max(-20, min(20, int(delta)))
-            except (TypeError, ValueError):
-                continue
-
-            new_score = max(0, min(100, old_score + delta))
-            score_ratio = new_score / old_score if old_score > 0 else 1.0
-            new_b = max(0, min(255, int(old_b * score_ratio)))
-            new_g = max(0, min(255, int(old_g * score_ratio)))
-            new_r = max(0, min(255, int(old_r * score_ratio)))
-
-            cursor.execute(
-                '''UPDATE nodes SET score = ?, color_b = ?, color_g = ?, color_r = ?
-                   WHERE id = ?''',
-                (new_score, new_b, new_g, new_r, node_id)
-            )
+            old_score, new_score = result
             changes.append((node_id, old_score, new_score))
 
-        self.graph_builder.conn.commit()
         return changes
 
-    def _handle_model_result(self, response, raw_output, elapsed, node_ids):
+    def _handle_model_result(self, response, raw_output, elapsed, node_ids, view):
         """Apply model output to SQLite. Must run on the main thread."""
         print(f"\n=== Graph Agent ===")
         print(f"Model: {self.model}")
@@ -301,8 +265,8 @@ class GraphAgent:
             print(f"Reasoning: {reasoning}\n")
 
         updates = response.get("updates", [])
-        changes = self._update_scores(updates)
-        self._mark_reviewed(node_ids)
+        changes = self._update_scores(updates, view)
+        self._mark_reviewed(node_ids, view)
 
         if changes:
             for node_id, old, new in changes:
@@ -321,7 +285,7 @@ class GraphAgent:
         start_time = time.time()
         response, raw_output = self._call_local_model(run["prompt"])
         elapsed = time.time() - start_time
-        self._handle_model_result(response, raw_output, elapsed, run["node_ids"])
+        self._handle_model_result(response, raw_output, elapsed, run["node_ids"], run["view"])
 
     def close(self):
         """Drain any running async job before shutdown."""

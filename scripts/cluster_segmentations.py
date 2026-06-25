@@ -17,7 +17,7 @@ class ClusteredSegmentation:
     geo_pos: tuple[float, float]  # global position (centroid + accumulated transform)
     color: tuple[int, int, int] | None = None  # color for visualization (optional)
 
-def cluster_segmentations(segmentations, distance_threshold=50):
+def cluster_segmentations(segmentations, distance_threshold=600):
     """Cluster segmentations by label and spatial proximity.
 
     Args:
@@ -79,19 +79,76 @@ def cluster_segmentations(segmentations, distance_threshold=50):
     return clustered
 
 LABEL_PROMPT = """
-Given nearby labels: {labels}
+Observed label counts: {labels}
 
-Name the physical place they form together.
-Use 1-2 common words.
-Do not use abstract words like pattern, analysis, arrangement.
-Do not explain.
+Given only these observed label counts, choose the most likely scene type.
+
+Allowed scene types:
+residential area, rural area, dense forest, park, road network
+
+Return only one label.
 """
 
 _SEMANTIC_LABEL_CACHE = {}
 
 
-def _fallback_label(cluster_segs):
-    return max(cluster_segs, key=lambda seg: seg.score).label
+def _normalize_semantic_label_input(label):
+    label = str(label).strip().lower()
+    label = re.sub(r'[^a-z0-9\s-]', ' ', label)
+    words = [word for word in re.split(r'\s+', label) if word]
+    if not words:
+        return None
+
+    normalized_words = []
+    for word in words:
+        if len(word) > 4 and word.endswith('ess') and not word.endswith('ness'):
+            word = word[:-1]
+
+        if len(word) > 4 and word.endswith('ies'):
+            word = f"{word[:-3]}y"
+        elif len(word) > 4 and (
+            word.endswith('ches')
+            or word.endswith('shes')
+            or word.endswith('xes')
+            or word.endswith('zes')
+            or word.endswith('ses')
+        ):
+            word = word[:-2]
+        elif len(word) > 3 and word.endswith('s') and not word.endswith('ss'):
+            word = word[:-1]
+
+        normalized_words.append(word)
+
+    return " ".join(normalized_words)
+
+
+def _semantic_label_inputs(labels):
+    normalized = []
+    seen = set()
+
+    for label in labels:
+        normalized_label = _normalize_semantic_label_input(label)
+        if not normalized_label or normalized_label in seen:
+            continue
+        seen.add(normalized_label)
+        normalized.append(normalized_label)
+
+    return tuple(sorted(normalized))
+
+
+def _semantic_label_count_inputs(cluster_segs):
+    counts_by_label = {}
+
+    for seg in cluster_segs:
+        label = _normalize_semantic_label_input(seg.label)
+        if not label:
+            continue
+        counts_by_label[label] = counts_by_label.get(label, 0) + int(seg.count)
+
+    return tuple(
+        f"{label}x{count}"
+        for label, count in sorted(counts_by_label.items())
+    )
 
 
 def _sanitize_semantic_label(label):
@@ -103,13 +160,18 @@ def _sanitize_semantic_label(label):
     return " ".join(words)
 
 
-def _semantic_label(labels, fallback):
-    unique_labels = tuple(sorted({str(label).strip().lower() for label in labels if str(label).strip()}))
+def _semantic_label(cluster_segs):
+    unique_labels = _semantic_label_inputs(seg.label for seg in cluster_segs)
     if not unique_labels:
-        return fallback
+        return None
+    if len(unique_labels) == 1:
+        return unique_labels[0]
 
-    if unique_labels in _SEMANTIC_LABEL_CACHE:
-        return _SEMANTIC_LABEL_CACHE[unique_labels]
+    label_counts = _semantic_label_count_inputs(cluster_segs)
+    cache_key = label_counts or unique_labels
+
+    if cache_key in _SEMANTIC_LABEL_CACHE:
+        return _SEMANTIC_LABEL_CACHE[cache_key]
 
     model = os.getenv("SEMANTIC_CLUSTER_MODEL", "gemma3:1b")
     ollama_url = os.getenv("OLLAMA_GENERATE_URL", "http://localhost:11434/api/generate")
@@ -121,7 +183,7 @@ def _semantic_label(labels, fallback):
             ollama_url,
             json={
                 "model": model,
-                "prompt": LABEL_PROMPT.format(labels=", ".join(unique_labels)),
+                "prompt": LABEL_PROMPT.format(labels=", ".join(label_counts)),
                 "stream": False,
                 "keep_alive": keep_alive,
                 "options": {
@@ -136,26 +198,54 @@ def _semantic_label(labels, fallback):
     except Exception:
         label = None
 
-    label = label or fallback
-    _SEMANTIC_LABEL_CACHE[unique_labels] = label
+    _SEMANTIC_LABEL_CACHE[cache_key] = label
     return label
 
 
 def _score_weighted_distances(clustered_segmentations, score_weight):
     centroids = np.array([seg.centroid for seg in clustered_segmentations], dtype=float)
     scores = np.array([seg.score for seg in clustered_segmentations], dtype=float)
+    score_weights = (np.clip(scores, 0, 100) / 100.0) ** 2
 
     spatial_distances = np.linalg.norm(
         centroids[:, None, :] - centroids[None, :, :],
         axis=2,
     )
-    score_deltas = np.abs(scores[:, None] - scores[None, :]) / 100.0
+    score_deltas = np.abs(score_weights[:, None] - score_weights[None, :])
 
     return spatial_distances * (1.0 + score_weight * score_deltas)
 
 
-def semantic_clustering(clustered_segmentations, distance_threshold=600, score_weight=2.0):
-    """Spatially merge existing clusters and label each merged cluster semantically.
+def semantic_cluster_from_members(cluster_segs):
+    avg_centroid = tuple(np.mean([seg.centroid for seg in cluster_segs], axis=0).astype(int))
+
+    valid_geo_positions = [seg.geo_pos for seg in cluster_segs if seg.geo_pos is not None]
+    avg_geo_pos = (
+        tuple(np.mean(valid_geo_positions, axis=0))
+        if valid_geo_positions
+        else avg_centroid
+    )
+
+    count = sum(seg.count for seg in cluster_segs)
+    merged_mask = np.logical_or.reduce([seg.mask for seg in cluster_segs]).astype(np.uint8)
+    representative = max(cluster_segs, key=lambda seg: seg.score)
+    label = representative.label
+    if len(cluster_segs) > 1:
+        label = _semantic_label(cluster_segs) or label
+
+    return ClusteredSegmentation(
+        label=label,
+        centroid=avg_centroid,
+        score=0,
+        count=count,
+        mask=merged_mask,
+        geo_pos=avg_geo_pos,
+        color=None,
+    )
+
+
+def semantic_clustering_with_members(clustered_segmentations, distance_threshold=450, score_weight=3.5):
+    """Spatially merge existing clusters and return semantic clusters with members.
 
     Args:
         clustered_segmentations: list of ClusteredSegmentation objects to merge
@@ -163,7 +253,7 @@ def semantic_clustering(clustered_segmentations, distance_threshold=600, score_w
         score_weight: how strongly score differences increase effective distance
 
     Returns:
-        list of ClusteredSegmentation objects
+        list of (ClusteredSegmentation, list[ClusteredSegmentation]) tuples
     """
     if not clustered_segmentations:
         return []
@@ -184,36 +274,34 @@ def semantic_clustering(clustered_segmentations, distance_threshold=600, score_w
 
     clusters_dict = {}
     for seg, cluster_id in zip(valid_segmentations, clustering.labels_):
+        if cluster_id == -1:
+            cluster_id = f"noise_{id(seg)}"
         clusters_dict.setdefault(cluster_id, []).append(seg)
 
     semantic_clustered = []
     for cluster_segs in clusters_dict.values():
-        avg_centroid = tuple(np.mean([seg.centroid for seg in cluster_segs], axis=0).astype(int))
+        prompt_labels = _semantic_label_inputs(seg.label for seg in cluster_segs)
+        semantic_cluster = semantic_cluster_from_members(cluster_segs)
 
-        valid_geo_positions = [seg.geo_pos for seg in cluster_segs if seg.geo_pos is not None]
-        avg_geo_pos = (
-            tuple(np.mean(valid_geo_positions, axis=0))
-            if valid_geo_positions
-            else avg_centroid
-        )
+        print("Semantic clustering:")
+        print(f"labels used for {semantic_cluster.label}:", list(_semantic_label_count_inputs(cluster_segs)) or list(prompt_labels))
+        print("----------------------")
 
-        score = max(seg.score for seg in cluster_segs)
-        count = sum(seg.count for seg in cluster_segs)
-        merged_mask = np.logical_or.reduce([seg.mask for seg in cluster_segs]).astype(np.uint8)
-        representative = max(cluster_segs, key=lambda seg: seg.score)
-        label = _semantic_label(
-            [seg.label for seg in cluster_segs],
-            fallback=_fallback_label(cluster_segs),
-        )
-
-        semantic_clustered.append(ClusteredSegmentation(
-            label=label,
-            centroid=avg_centroid,
-            score=score,
-            count=count,
-            mask=merged_mask,
-            geo_pos=avg_geo_pos,
-            color=representative.color,
+        semantic_clustered.append((
+            semantic_cluster,
+            cluster_segs,
         ))
 
     return semantic_clustered
+
+
+def semantic_clustering(clustered_segmentations, distance_threshold=2000, score_weight=2.0):
+    """Spatially merge existing clusters and label each merged cluster semantically."""
+    return [
+        semantic_cluster
+        for semantic_cluster, _ in semantic_clustering_with_members(
+            clustered_segmentations,
+            distance_threshold=distance_threshold,
+            score_weight=score_weight,
+        )
+    ]

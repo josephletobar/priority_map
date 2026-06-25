@@ -16,7 +16,7 @@ from scripts.video_helper import (
     safe_imwrite,
     VideoOutput,
 )
-from scripts.cluster_segmentations import cluster_segmentations, ClusteredSegmentation, semantic_clustering
+from scripts.cluster_segmentations import cluster_segmentations, ClusteredSegmentation
 
 from modules.SceneUnderstanding import SceneUnderstanding
 from modules.Heatmap import Heatmap
@@ -98,12 +98,14 @@ class DroneHeatmap:
             output_dir=self.output_dir,
             show=show,
             record=record,
+            window_name="Drone Heatmap",
         )
 
         self.heat_panoramic_builder = PanoramaBuilder(alpha=0.9)
         self.panoramic_builder = PanoramaBuilder(alpha=0.15)
         self.show = show
         self.last_graph_frame = None
+        self.graph_view = "semantic"
 
     def _load_dataset_index(self):
         image_extensions = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".webp"}
@@ -229,11 +231,9 @@ class DroneHeatmap:
         if heatmap_text is not None and heatmap_only is not None:
             out = heatmap_text
 
-        semantic_clusters = semantic_clustering(clustered) # cluster after colors have been assigned
-
         if scene_dict is not None:
-            self.graph_builder.add_nodes(semantic_clusters) # using high level semantic clusters for graph building TODO: make heirarchical DB
-            graph_frame = self.graph_builder.render_2d_graph_frame()
+            self.graph_builder.add_nodes(clustered)
+            graph_frame = self.graph_builder.render_2d_graph_frame(view=self.graph_view)
             if graph_frame is not None:
                 self.last_graph_frame = graph_frame
 
@@ -273,12 +273,32 @@ class DroneHeatmap:
 
 
         # Write Output Frame To Video
-        return self.video_output.handle_frame(
+
+        keep_running = self.video_output.handle_frame(
             out,
-            header=f"Task: {self.task}",
+            header=f"Task: {self.task} | Graph Level {1 if self.graph_view == 'semantic' else 2}",
             side_image=mask_frame,
             side_header=f"Mask(s): {', '.join(sorted(self.masks)) or 'None'}",
         )
+        self._handle_graph_view_key()
+        return keep_running
+
+    def _handle_graph_view_key(self):
+        key = self.video_output.last_key
+        if key == ord("1"):
+            self._set_graph_view("semantic")
+        elif key == ord("2"):
+            self._set_graph_view("base")
+
+    def _set_graph_view(self, view):
+        if self.graph_view == view:
+            return
+
+        self.graph_view = view
+        graph_frame = self.graph_builder.render_2d_graph_frame(view=self.graph_view)
+        if graph_frame is not None:
+            self.last_graph_frame = graph_frame
+        print(f"Graph view: {self.graph_view}")
 
     def run(self):
         while self.has_next():

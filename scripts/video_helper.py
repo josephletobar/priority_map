@@ -148,6 +148,7 @@ def _handle_video_frame(
     window_name=None,
     margin=PREVIEW_MARGIN,
 ):
+    key = -1
     image = compose_video_frame(
         image,
         header,
@@ -168,9 +169,9 @@ def _handle_video_frame(
         cv2.imshow(window_name or header, resize_to_screen(image, margin=margin))
         key = cv2.waitKey(1) & 0xFF
         if key in (ord("q"), 27):
-            return image, video_writer, video_path, False
+            return image, video_writer, video_path, False, key
 
-    return image, video_writer, video_path, True
+    return image, video_writer, video_path, True, key
 
 
 class VideoOutput:
@@ -189,9 +190,10 @@ class VideoOutput:
         self.margin = margin
         self.video_writer = None
         self.video_path = None
+        self.last_key = -1
 
     def handle_frame(self, image, header, side_image=None, side_header=None):
-        image, self.video_writer, video_path, keep_running = _handle_video_frame(
+        image, self.video_writer, video_path, keep_running, key = _handle_video_frame(
             image,
             header,
             side_image=side_image,
@@ -203,6 +205,7 @@ class VideoOutput:
             window_name=self.window_name,
             margin=self.margin,
         )
+        self.last_key = key
         if video_path is not None:
             self.video_path = video_path
         return keep_running
