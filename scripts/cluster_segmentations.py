@@ -79,9 +79,9 @@ def cluster_segmentations(segmentations, distance_threshold=600):
     return clustered
 
 LABEL_PROMPT = """
-Observed label counts: {labels}
+Observed labels: {labels}
 
-Given only these observed label counts, choose the most likely scene type.
+Given only these observed labels, choose the most likely scene type.
 
 Allowed scene types:
 residential area, rural area, dense forest, park, road network
@@ -94,6 +94,8 @@ _SEMANTIC_LABEL_CACHE = {}
 
 def _normalize_semantic_label_input(label):
     label = str(label).strip().lower()
+    label = re.sub(r'\bx\d+\b', ' ', label)
+    label = re.sub(r'(?<=[a-z])(?:x\d+)+\b', ' ', label)
     label = re.sub(r'[^a-z0-9\s-]', ' ', label)
     words = [word for word in re.split(r'\s+', label) if word]
     if not words:
@@ -136,21 +138,6 @@ def _semantic_label_inputs(labels):
     return tuple(sorted(normalized))
 
 
-def _semantic_label_count_inputs(cluster_segs):
-    counts_by_label = {}
-
-    for seg in cluster_segs:
-        label = _normalize_semantic_label_input(seg.label)
-        if not label:
-            continue
-        counts_by_label[label] = counts_by_label.get(label, 0) + int(seg.count)
-
-    return tuple(
-        f"{label}x{count}"
-        for label, count in sorted(counts_by_label.items())
-    )
-
-
 def _sanitize_semantic_label(label):
     label = str(label).strip().lower()
     label = re.sub(r'[^a-z0-9\s-]', '', label)
@@ -167,11 +154,8 @@ def _semantic_label(cluster_segs):
     if len(unique_labels) == 1:
         return unique_labels[0]
 
-    label_counts = _semantic_label_count_inputs(cluster_segs)
-    cache_key = label_counts or unique_labels
-
-    if cache_key in _SEMANTIC_LABEL_CACHE:
-        return _SEMANTIC_LABEL_CACHE[cache_key]
+    if unique_labels in _SEMANTIC_LABEL_CACHE:
+        return _SEMANTIC_LABEL_CACHE[unique_labels]
 
     model = os.getenv("SEMANTIC_CLUSTER_MODEL", "gemma3:1b")
     ollama_url = os.getenv("OLLAMA_GENERATE_URL", "http://localhost:11434/api/generate")
@@ -183,7 +167,7 @@ def _semantic_label(cluster_segs):
             ollama_url,
             json={
                 "model": model,
-                "prompt": LABEL_PROMPT.format(labels=", ".join(label_counts)),
+                "prompt": LABEL_PROMPT.format(labels=", ".join(unique_labels)),
                 "stream": False,
                 "keep_alive": keep_alive,
                 "options": {
@@ -198,7 +182,7 @@ def _semantic_label(cluster_segs):
     except Exception:
         label = None
 
-    _SEMANTIC_LABEL_CACHE[cache_key] = label
+    _SEMANTIC_LABEL_CACHE[unique_labels] = label
     return label
 
 
@@ -284,7 +268,7 @@ def semantic_clustering_with_members(clustered_segmentations, distance_threshold
         semantic_cluster = semantic_cluster_from_members(cluster_segs)
 
         print("Semantic clustering:")
-        print(f"labels used for {semantic_cluster.label}:", list(_semantic_label_count_inputs(cluster_segs)) or list(prompt_labels))
+        print(f"labels used for {semantic_cluster.label}:", list(prompt_labels))
         print("----------------------")
 
         semantic_clustered.append((
