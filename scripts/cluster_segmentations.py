@@ -17,7 +17,7 @@ class ClusteredSegmentation:
     geo_pos: tuple[float, float]  # global position (centroid + accumulated transform)
     color: tuple[int, int, int] | None = None  # color for visualization (optional)
 
-def cluster_segmentations(segmentations, distance_threshold=600):
+def cluster_segmentations(segmentations, distance_threshold=150):
     """Cluster segmentations by label and spatial proximity.
 
     Args:

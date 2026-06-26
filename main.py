@@ -9,6 +9,7 @@ from pathlib import Path
 import cv2
 import pandas as pd
 import traceback
+import csv
 from dotenv import load_dotenv
 
 from scripts.video_helper import (
@@ -38,8 +39,8 @@ def parse_args():
     )
     parser.add_argument(
         "--dataset-root",
-        default=r"D:\Train\Train\query_images",
-        # default = r"C:\Users\jletobar3\Projects\dronevid2",
+        # default=r"D:\Train\Train\query_images",
+        default = r"C:\Users\jletobar3\Projects\dronevid2",
         help="Dataset root. Supports plain image folder.",
     )
     parser.add_argument("--task", default="Find cars")
@@ -161,8 +162,8 @@ class DroneHeatmap:
             row = self.query_csv.iloc[frame_index]
             self.index += 1
 
-            image_name = self._row_value(row, "name", "filename", default="")
-            image_path = (self.query_images_dir / str(image_name))
+            self.image_name = self._row_value(row, "name", "filename", default="")
+            image_path = (self.query_images_dir / str(self.image_name))
             image = cv2.imread(str(image_path))
 
             if image is None:
@@ -221,6 +222,25 @@ class DroneHeatmap:
 
         clustered = cluster_segmentations(segmentations)
 
+        # Set Where to Save Observations CSV
+        csv_path = Path(f"{self.output_dir}/observations.csv")
+        if not csv_path.exists():
+            with csv_path.open("w", newline="") as f:
+                writer = csv.writer(f)
+                writer.writerow(["image_name", "label", "centroid_x", "centroid_y"])
+
+        # Save Clustered Observations to CSV
+        with csv_path.open("a", newline="") as f:
+            writer = csv.writer(f)
+            for cluster in clustered:
+                cx, cy = cluster.centroid
+                writer.writerow([
+                    self.image_name,
+                    cluster.label,
+                    cx,
+                    cy,
+                ])
+
         # Set Segmentation Types to Display MASKS
         mask_frame = None
         if self.masks:
@@ -230,6 +250,10 @@ class DroneHeatmap:
         heatmap_text, heatmap_only = self.heatmap.draw_heatmap(image, clustered)
         if heatmap_text is not None and heatmap_only is not None:
             out = heatmap_text
+
+        # Save Heatmap Individual Heatmap Images
+        os.makedirs(f"{self.output_dir}/heatmap_imgs", exist_ok=True)
+        safe_imwrite(f"{self.output_dir}/heatmap_imgs/{self.image_name}", heatmap_only)
 
         if scene_dict is not None:
             self.graph_builder.add_nodes(clustered)
@@ -312,6 +336,9 @@ class DroneHeatmap:
 
 
 def main():
+
+    t0 = time.perf_counter()
+    
     args = parse_args()
     dataset_root = args.image_folder or args.dataset_root
     drone = DroneHeatmap(
@@ -337,6 +364,8 @@ def main():
         # if args.chat:
         #     run_graph_chat(drone)
         # drone.graph_builder.draw_3d_graph()
+
+        print(f"Total time: {(time.perf_counter() - t0):.2f} seconds")
 
 
 if __name__ == "__main__":
