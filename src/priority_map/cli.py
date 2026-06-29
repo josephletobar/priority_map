@@ -29,6 +29,7 @@ def parse_args(argv=None):
     parser.add_argument("--sam-step", type=int, default=config.SAM_STEP)
     parser.add_argument("--sam-thresh", type=float, default=config.SAM_TRESH)
     parser.add_argument("--blur-spread", type=float, default=config.BLUR_SPREAD)
+    parser.add_argument("--sam-model-path", default=config.SAM_MODEL_PATH)
     parser.add_argument(
         "--max-image-edge",
         type=int,
@@ -61,6 +62,7 @@ def main(argv=None):
         sam_thresh=args.sam_thresh,
         blur_spread=args.blur_spread,
         max_image_edge=args.max_image_edge,
+        sam_model_path=args.sam_model_path,
         show=args.show,
         panoramic=args.panoramic,
         graph_agent=args.graph_agent,

@@ -64,6 +64,7 @@ class PriorityMapRunner:
         sam_thresh=config.SAM_TRESH,
         blur_spread=config.BLUR_SPREAD,
         max_image_edge=config.MAX_IMAGE_EDGE,
+        sam_model_path=config.SAM_MODEL_PATH,
         show=False,
         record=True,
         panoramic=False,
@@ -78,6 +79,7 @@ class PriorityMapRunner:
         self.sam_thresh = sam_thresh
         self.blur_spread = blur_spread
         self.max_image_edge = max_image_edge
+        self.sam_model_path = sam_model_path
         self.panoramic = panoramic
         
         self.query_csv, self.query_images_dir = self._load_dataset_index()
@@ -89,7 +91,11 @@ class PriorityMapRunner:
         self.observations_csv = self.output_dir / "observations.csv"
 
         self.scene_understanding = SceneUnderstanding()
-        self.segmentation = Segment(show_preview=show, sam_thresh=sam_thresh)
+        self.segmentation = Segment(
+            show_preview=show,
+            sam_thresh=sam_thresh,
+            sam_model_path=sam_model_path,
+        )
         self.graph_builder = GraphBuilder(output_dir=self.output_dir)
         self.graph_agent = (
             GraphAgent(self.graph_builder, self.task_description)

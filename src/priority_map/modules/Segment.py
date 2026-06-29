@@ -31,7 +31,12 @@ class Segmentation:
 
 class Segment():
 
-    def __init__(self, show_preview=False, sam_thresh=config.SAM_TRESH):
+    def __init__(
+        self,
+        show_preview=False,
+        sam_thresh=config.SAM_TRESH,
+        sam_model_path=config.SAM_MODEL_PATH,
+    ):
 
         self.segmentations = []
         self.preview_output = VideoOutput(
@@ -45,7 +50,7 @@ class Segment():
             conf=sam_thresh,
             task="segment",
             mode="predict",
-            model="models/sam3.pt",
+            model=str(sam_model_path),
             # half=True,  # Use FP16 for faster inference
             save=False,
         )
