@@ -1,18 +1,52 @@
 import numpy as np
 import cv2
 from modules.PanoramaBuilder import PanoramaBuilder
+from config.params import BLUR_SPREAD
 
 HEATMAP_PROCESS_SCALE = 1
+LABEL_REFERENCE_HEIGHT = 720
+LABEL_FONT_MIN_SCALE = 0.10
+LABEL_FONT_GAIN = 1.35
+LABEL_FONT_GAMMA = 2.0
+LABEL_COLOR_MAX_DIVERGENCE = 80.0
 
 
 class Heatmap:
     def __init__(self):
-        self.heat_gamma = 5.0
+        self.heat_gamma = 1.0
 
-        self.BLUR_SPREAD = 53.0
+        self.BLUR_SPREAD = BLUR_SPREAD
 
         self.transform_dx = 0
         self.transform_dy = 0
+
+    def _annotation_resolution_scale(self, image_shape):
+        height = image_shape[0]
+        return max(1, height) / LABEL_REFERENCE_HEIGHT
+
+    def _label_font_scale(self, score, resolution_scale):
+        score_norm = np.clip(float(score) / 100.0, 0.0, 1.0)
+        return resolution_scale * (
+            LABEL_FONT_MIN_SCALE + LABEL_FONT_GAIN * (score_norm ** LABEL_FONT_GAMMA)
+        )
+
+    def _score_color(self, score):
+        heat_value = np.uint8([[np.clip(float(score), 0.0, 100.0) * 2.55]])
+        return cv2.applyColorMap(heat_value, cv2.COLORMAP_JET)[0, 0]
+
+    def _label_color(self, heatmap, x, y, score):
+        score_color = self._score_color(score)
+        if heatmap is None:
+            return tuple(int(c) for c in score_color)
+
+        pulled_color = heatmap[y, x]
+        color_distance = np.linalg.norm(
+            pulled_color.astype(np.float32) - score_color.astype(np.float32)
+        )
+        if color_distance > LABEL_COLOR_MAX_DIVERGENCE:
+            return tuple(int(c) for c in score_color)
+
+        return tuple(int(c) for c in pulled_color)
 
     def _create_heatmap(self, image, regions):
         if not regions: return image, None
@@ -88,6 +122,7 @@ class Heatmap:
     def _draw_segmentation_labels(self, image, heatmap, segmentations):
         output = image.copy()
         height, width = output.shape[:2]
+        resolution_scale = self._annotation_resolution_scale(output.shape)
 
         for segmentation in segmentations:
             if segmentation.centroid is None:
@@ -97,22 +132,30 @@ class Heatmap:
             x = max(0, min(width - 1, int(x)))
             y = max(0, min(height - 1, int(y)))
 
-            color = tuple(int(c) for c in heatmap[y, x])
+            color = self._label_color(heatmap, x, y, segmentation.score)
 
             segmentation.color = color  # Store the color in the segmentation object
 
+            score_norm = np.clip(float(segmentation.score) / 100.0, 0.0, 1.0)
+            dot_radius = max(1, int(round(4 * score_norm * resolution_scale)))
             cv2.circle(
                 output,  # image
                 (x, y),  # center
-                int(4 * float(segmentation.score/100)),  # scaled according to relevance
+                dot_radius,  # scaled according to relevance and frame size
                 color,  # BGR color from heatmap
                 -1,  # filled
                 cv2.LINE_AA,  # antialiased
             )
 
-            text_size = cv2.getTextSize(segmentation.label, cv2.FONT_HERSHEY_SIMPLEX, 1.25 * float(segmentation.score/100), 2 if segmentation.score > 50 else 1)[0]
-            rect_top_left = (x + 4, y - text_size[1] - 10)
-            rect_bottom_right = (x + 8 + text_size[0], y + 2)
+            font_scale = self._label_font_scale(segmentation.score, resolution_scale)
+            thickness = max(1, int(round((2 if segmentation.score > 50 else 1) * resolution_scale)))
+            text_size, baseline = cv2.getTextSize(segmentation.label, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thickness)
+            pad_x = max(2, int(round(4 * resolution_scale)))
+            pad_y = max(2, int(round(4 * resolution_scale)))
+            text_x = x + max(3, int(round(6 * resolution_scale)))
+            text_y = y - max(3, int(round(6 * resolution_scale)))
+            rect_top_left = (text_x - pad_x, text_y - text_size[1] - pad_y)
+            rect_bottom_right = (text_x + text_size[0] + pad_x, text_y + baseline + pad_y)
 
             overlay = output.copy()
             cv2.rectangle(overlay, rect_top_left, rect_bottom_right, (60, 60, 60), -1)  # gray filled
@@ -121,11 +164,11 @@ class Heatmap:
             cv2.putText(
                 output,  # image
                 segmentation.label,  # text
-                (x + 6, y - 6),  # position
+                (text_x, text_y),  # position
                 cv2.FONT_HERSHEY_SIMPLEX,  # font
-                1.25 * float((segmentation.score+10)/100),  # scaled according to relevance
+                font_scale,  # scaled according to relevance
                 color,  # BGR color from heatmap
-                2 if segmentation.score > 50 else 1,  # thickness
+                thickness,  # thickness
                 cv2.LINE_AA,  # antialiased
             )
 

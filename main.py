@@ -3,7 +3,9 @@ import os
 from attr import dataclass
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 
+import atexit
 import argparse
+import signal
 import time
 from pathlib import Path
 import cv2
@@ -11,7 +13,7 @@ import pandas as pd
 import traceback
 import csv
 from dotenv import load_dotenv
-
+import config.params as config
 from scripts.video_helper import (
     label_mask,
     safe_imwrite,
@@ -40,7 +42,8 @@ def parse_args():
     parser.add_argument(
         "--dataset-root",
         # default=r"D:\Train\Train\query_images",
-        default = r"C:\Users\jletobar3\Projects\dronevid2",
+        # default = r"C:\Users\jletobar3\Projects\dronevid2",
+        default = r"D:\UAV_VisLoc_dataset\05\drone",
         help="Dataset root. Supports plain image folder.",
     )
     parser.add_argument("--task", default="Find cars")
@@ -65,7 +68,7 @@ class DroneHeatmap:
         task="Find cars",
         debrief="debrief.txt",
         mask=None,
-        sam_step=60,
+        sam_step=config.SAM_STEP,
         show=False,
         record=False,
         panoramic=False,
@@ -99,7 +102,15 @@ class DroneHeatmap:
             output_dir=self.output_dir,
             show=show,
             record=record,
+            filename="video.avi",
             window_name="Drone Heatmap",
+        )
+        self.heatmap_video_output = VideoOutput(
+            output_dir=self.output_dir,
+            show=False,
+            record=record,
+            filename="heatmap.avi",
+            window_name="Heatmap Only",
         )
 
         self.heat_panoramic_builder = PanoramaBuilder(alpha=0.9)
@@ -107,6 +118,7 @@ class DroneHeatmap:
         self.show = show
         self.last_graph_frame = None
         self.graph_view = "semantic"
+        self._closed = False
 
     def _load_dataset_index(self):
         image_extensions = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".webp"}
@@ -187,10 +199,31 @@ class DroneHeatmap:
         return None
     
     def close_video(self):
+        if self._closed:
+            return
+
+        self._closed = True
+        errors = []
+
+        # Release video writers/windows before slower shutdown work so Ctrl+C
+        # cannot leave the output file waiting on unrelated cleanup.
+        cleanup_steps = [
+            ("main video output", self.video_output.close),
+            ("heatmap video output", self.heatmap_video_output.close),
+            ("SAM preview output", self.segmentation.close),
+            ("graph builder", self.graph_builder.close),
+        ]
         if self.graph_agent is not None:
-            self.graph_agent.close()
-        self.video_output.close()
-        self.graph_builder.close()
+            cleanup_steps.append(("graph agent", self.graph_agent.close))
+
+        for name, close in cleanup_steps:
+            try:
+                close()
+            except Exception as exc:
+                errors.append((name, exc))
+
+        for name, exc in errors:
+            print(f"Cleanup warning ({name}): {exc}")
 
     def run_frame(self):
         if self.graph_agent is not None:
@@ -250,6 +283,10 @@ class DroneHeatmap:
         heatmap_text, heatmap_only = self.heatmap.draw_heatmap(image, clustered)
         if heatmap_text is not None and heatmap_only is not None:
             out = heatmap_text
+            self.heatmap_video_output.handle_frame(
+                heatmap_text,
+                header=f"Task: {self.task}",
+            )
 
         # Save Heatmap Individual Heatmap Images
         os.makedirs(f"{self.output_dir}/heatmap_imgs", exist_ok=True)
@@ -269,7 +306,7 @@ class DroneHeatmap:
             graph_resized = cv2.resize(self.last_graph_frame, (int(self.last_graph_frame.shape[1] * heatmap_height / self.last_graph_frame.shape[0]), heatmap_height))
             out = cv2.hconcat([out, graph_resized])
 
-        # Create Panoramic Images
+        # Create Panoramic Images (If Enabled, Experimental)
         if self.panoramic:
             panorama_save = 10
             os.makedirs(f"{self.output_dir}/heat_panorama", exist_ok=True)
@@ -338,29 +375,62 @@ class DroneHeatmap:
 def main():
 
     t0 = time.perf_counter()
-    
-    args = parse_args()
-    dataset_root = args.image_folder or args.dataset_root
-    drone = DroneHeatmap(
-        dataset_root,
-        task=args.task,
-        debrief=args.debrief,
-        mask=args.mask,
-        show=args.show,
-        record=args.record,
-        panoramic=args.panoramic,
-        graph_agent=args.graph_agent,
-    )
+    drone = None
+    cleaned_up = False
 
+    def cleanup():
+        nonlocal cleaned_up
+        if cleaned_up:
+            return
+
+        cleaned_up = True
+        if drone is not None:
+            drone.close_video()
+        try:
+            cv2.destroyAllWindows()
+            cv2.waitKey(1)
+        except cv2.error as exc:
+            print(f"Cleanup warning (OpenCV windows): {exc}")
+
+    atexit.register(cleanup)
+    previous_sigint = signal.getsignal(signal.SIGINT)
+
+    def handle_sigint(signum, frame):
+        print("\nInterrupted. Cleaning up video resources...")
+        cleanup()
+        raise KeyboardInterrupt
+
+    signal.signal(signal.SIGINT, handle_sigint)
+    
     try:
+        args = parse_args()
+        dataset_root = args.image_folder or args.dataset_root
+        drone = DroneHeatmap(
+            dataset_root,
+            task=args.task,
+            debrief=args.debrief,
+            mask=args.mask,
+            show=args.show,
+            record=args.record,
+            panoramic=args.panoramic,
+            graph_agent=args.graph_agent,
+        )
+
         drone.run()
+
+    except KeyboardInterrupt:
+        pass
 
     except Exception:
         traceback.print_exc()
 
     finally:
-        drone.close_video()
-        cv2.destroyAllWindows()
+        cleanup()
+        signal.signal(signal.SIGINT, previous_sigint)
+        try:
+            atexit.unregister(cleanup)
+        except ValueError:
+            pass
         # if args.chat:
         #     run_graph_chat(drone)
         # drone.graph_builder.draw_3d_graph()

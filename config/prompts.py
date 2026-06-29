@@ -8,13 +8,14 @@ Mission objective: {task}
 Existing vocabulary for consistency: {vocabulary}
 The existing vocabulary contains previously detected labels and their prior relevance scores.
 Reuse labels when appropriate and keep scores reasonably stable across similar frames.
+Do not reuse if the new observation is uniquely distinct.
 Do not make large score changes unless the scene meaningfully changes.
 
 For each visible category, output:
 
-- "prompt": 1-3 keyword phrases optimized for localization.
+- "prompt": a keyword phrase optimized for localization.
   Prefer simple reusable prompts such as:
-  "road", "field", "forest", "structure, rooftops", "vehicle, car".
+  "road", "field", "forest", "rooftops", "vehicle".
   Do not output sentences, colors, locations, or image-specific descriptions.
 
 - "score": relevance score from 0-100 for the mission objective.
@@ -50,8 +51,8 @@ Example schema:
     "forest": {{"prompt": "forest", "score": 10}},
     "field": {{"prompt": "field", "score": 20}},
     "road": {{"prompt": "road", "score": 90}},
-    "building": {{"prompt": "structure, rooftops", "score": 70}},
-    "vehicle": {{"prompt": "vehicle, car", "score": 100}}
+    "building": {{"prompt": "rooftops", "score": 70}},
+    "vehicle": {{"prompt": "vehicle", "score": 100}}
 }}
 """
 

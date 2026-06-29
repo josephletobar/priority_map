@@ -5,6 +5,7 @@ from dataclasses import dataclass
 import time
 from modules.PanoramaBuilder import PanoramaBuilder
 from scripts.video_helper import VideoOutput
+import config.params as config
 
 FLOW_SCALE = 0.05
 SAM3_PREVIEW_MARGIN = 120
@@ -41,11 +42,11 @@ class Segment():
         )
 
         overrides = dict(
-            conf=0.15,
+            conf=config.SAM_TRESH,
             task="segment",
             mode="predict",
             model="models/sam3.pt",
-            half=True,  # Use FP16 for faster inference
+            # half=True,  # Use FP16 for faster inference
             save=False,
         )
         self.predictor = SAM3SemanticPredictor(overrides=overrides)
@@ -57,6 +58,9 @@ class Segment():
         self.transform_dy = 0
         self.cumulative_transform_dx = 0
         self.cumulative_transform_dy = 0
+
+    def close(self):
+        self.preview_output.close()
 
     def _parse_dict(self, scene_dict):
         prompts = []
@@ -207,11 +211,11 @@ class Segment():
 
                     annotated = result.plot()
 
-                    if self.preview_output.show:
-                        self.preview_output.handle_frame(
-                            annotated,
-                            header="SAM3 Segmentation",
-                        )
+                    # if self.preview_output.show:
+                    #     self.preview_output.handle_frame(
+                    #         annotated,
+                    #         header="SAM3 Segmentation",
+                    #     )
         
                     if result.masks is not None:
                         masks = result.masks.data.cpu().numpy()  # (N, H, W)

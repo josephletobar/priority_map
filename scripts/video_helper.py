@@ -6,25 +6,91 @@ from pathlib import Path
 MASK_EDGE_BLUR = 51
 PREVIEW_MARGIN = 120
 
-def video_path(output_dir="example", filename="video.mp4"):
+def video_path(output_dir="example", filename="video.avi"):
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     return output_dir / filename
 
 
-def create_video_writer(image, output_dir="examples", filename="video.mp4", fps=30):
-    output_path = video_path(output_dir, filename)
+def _video_writer_candidates(filename):
+    path = Path(filename)
+    suffix = path.suffix.lower()
 
+    if suffix == ".mp4":
+        avi_filename = f"{path.stem}.avi"
+        return [
+            (filename, "avc1"),
+            (filename, "H264"),
+            (avi_filename, "MJPG"),
+        ]
+
+    if suffix == ".avi":
+        return [
+            (filename, "MJPG"),
+            (filename, "XVID"),
+        ]
+
+    return [
+        ("video.avi", "MJPG"),
+        ("video.avi", "XVID"),
+    ]
+
+
+def _prepare_video_frame(image, frame_size=None):
+    if image.dtype != np.uint8:
+        image = np.clip(image, 0, 255).astype(np.uint8)
+
+    if image.ndim == 2:
+        image = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
+    elif image.shape[2] == 4:
+        image = cv2.cvtColor(image, cv2.COLOR_BGRA2BGR)
+
+    if frame_size is None:
+        height, width = image.shape[:2]
+        pad_bottom = height % 2
+        pad_right = width % 2
+        if pad_bottom or pad_right:
+            image = cv2.copyMakeBorder(
+                image,
+                0,
+                pad_bottom,
+                0,
+                pad_right,
+                cv2.BORDER_CONSTANT,
+                value=(0, 0, 0),
+            )
+    else:
+        width, height = frame_size
+        if image.shape[1] != width or image.shape[0] != height:
+            image = cv2.resize(image, (width, height), interpolation=cv2.INTER_AREA)
+
+    return np.ascontiguousarray(image)
+
+
+def create_video_writer(image, output_dir="examples", filename="video.avi", fps=30):
+    image = _prepare_video_frame(image)
     height, width = image.shape[:2]
-    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-    video_writer = cv2.VideoWriter(str(output_path), fourcc, fps, (width, height))
+    frame_size = (width, height)
+    failed = []
 
-    if not video_writer.isOpened():
+    for candidate_filename, codec in _video_writer_candidates(filename):
+        output_path = video_path(output_dir, candidate_filename)
+        fourcc = cv2.VideoWriter_fourcc(*codec)
+        video_writer = cv2.VideoWriter(str(output_path), fourcc, fps, frame_size)
+
+        if video_writer.isOpened():
+            print(f"Recording video to {output_path} using {codec}")
+            return video_writer, output_path, frame_size
+
         video_writer.release()
-        raise RuntimeError(f"Failed to open video writer for {output_path}")
+        failed.append(f"{output_path} ({codec})")
+        try:
+            output_path.unlink(missing_ok=True)
+        except OSError:
+            pass
 
-    return video_writer, output_path
+    raise RuntimeError(f"Failed to open video writer. Tried: {', '.join(failed)}")
 
 
 def release_video_writer(video_writer):
@@ -32,14 +98,25 @@ def release_video_writer(video_writer):
         video_writer.release()
 
 
-def get_video_writer(video_writer, image, output_dir, filename="video.mp4"):
+def get_video_writer(video_writer, image, output_dir, filename="video.avi", frame_size=None):
     if video_writer is not None:
-        return video_writer, None
+        return (
+            video_writer,
+            None,
+            frame_size,
+            _prepare_video_frame(image, frame_size=frame_size),
+        )
 
-    return create_video_writer(
+    video_writer, output_path, frame_size = create_video_writer(
         image,
         output_dir=output_dir,
         filename=filename,
+    )
+    return (
+        video_writer,
+        output_path,
+        frame_size,
+        _prepare_video_frame(image, frame_size=frame_size),
     )
 
 
@@ -144,7 +221,9 @@ def _handle_video_frame(
     show=False,
     record=False,
     output_dir="examples",
+    filename="video.avi",
     video_writer=None,
+    video_frame_size=None,
     window_name=None,
     margin=PREVIEW_MARGIN,
 ):
@@ -158,20 +237,22 @@ def _handle_video_frame(
 
     video_path = None
     if record:
-        video_writer, video_path = get_video_writer(
+        video_writer, video_path, video_frame_size, video_frame = get_video_writer(
             video_writer,
             image,
             output_dir,
+            filename=filename,
+            frame_size=video_frame_size,
         )
-        video_writer.write(image)
+        video_writer.write(video_frame)
 
     if show:
         cv2.imshow(window_name or header, resize_to_screen(image, margin=margin))
         key = cv2.waitKey(1) & 0xFF
         if key in (ord("q"), 27):
-            return image, video_writer, video_path, False, key
+            return image, video_writer, video_path, video_frame_size, False, key
 
-    return image, video_writer, video_path, True, key
+    return image, video_writer, video_path, video_frame_size, True, key
 
 
 class VideoOutput:
@@ -180,20 +261,23 @@ class VideoOutput:
         output_dir="examples",
         show=False,
         record=False,
+        filename="video.avi",
         window_name=None,
         margin=PREVIEW_MARGIN,
     ):
         self.output_dir = output_dir
         self.show = show
         self.record = record
+        self.filename = filename
         self.window_name = window_name
         self.margin = margin
         self.video_writer = None
         self.video_path = None
+        self.video_frame_size = None
         self.last_key = -1
 
     def handle_frame(self, image, header, side_image=None, side_header=None):
-        image, self.video_writer, video_path, keep_running, key = _handle_video_frame(
+        image, self.video_writer, video_path, self.video_frame_size, keep_running, key = _handle_video_frame(
             image,
             header,
             side_image=side_image,
@@ -201,7 +285,9 @@ class VideoOutput:
             show=self.show,
             record=self.record,
             output_dir=self.output_dir,
+            filename=self.filename,
             video_writer=self.video_writer,
+            video_frame_size=self.video_frame_size,
             window_name=self.window_name,
             margin=self.margin,
         )
@@ -213,6 +299,12 @@ class VideoOutput:
     def close(self):
         release_video_writer(self.video_writer)
         self.video_writer = None
+        self.video_frame_size = None
+        if self.show and self.window_name:
+            try:
+                cv2.destroyWindow(self.window_name)
+            except cv2.error:
+                pass
 
 
 def label_mask(masks: list[str], image: np.ndarray, segmentations: list):
