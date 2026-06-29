@@ -58,7 +58,7 @@ class PriorityMapRunner:
         image_folder: str | Path | None = None,
         output_dir: str | Path | None = None,
         task="Find cars",
-        debrief="debrief.txt",
+        debrief: str | None = None,
         mask=None,
         sam_step=config.SAM_STEP,
         show=False,
@@ -69,6 +69,7 @@ class PriorityMapRunner:
         self.dataset_root = Path(image_folder) if image_folder is not None else default_image_folder()
         self.task = task
         self.debrief = debrief
+        self.task_description = task if not debrief else f"{task}: {debrief}"
         self.masks = mask or []
         self.sam_step = sam_step
         self.panoramic = panoramic
@@ -85,7 +86,7 @@ class PriorityMapRunner:
         self.segmentation = Segment(show_preview=show)
         self.graph_builder = GraphBuilder(output_dir=self.output_dir)
         self.graph_agent = (
-            GraphAgent(self.graph_builder, f"{self.task}: {self.debrief}")
+            GraphAgent(self.graph_builder, self.task_description)
             if graph_agent
             else None
         )
@@ -239,7 +240,7 @@ class PriorityMapRunner:
 
         scene_dict = None
         if self.should_run_sam(frame):
-            scene_dict = self.scene_understanding.get_labels(image, f"{self.task}: {self.debrief}")
+            scene_dict = self.scene_understanding.get_labels(image, self.task_description)
         # print(scene_dict)
 
         # Get Segmentations From Image

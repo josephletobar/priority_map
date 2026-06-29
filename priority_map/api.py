@@ -9,7 +9,7 @@ def run_priority_map(
     image_folder: str | Path | None = None,
     output_dir: str | Path | None = None,
     task: str = "Find cars",
-    debrief: str = "debrief.txt",
+    debrief: str | None = None,
     mask: list[str] | None = None,
     show: bool = False,
     record: bool = True,

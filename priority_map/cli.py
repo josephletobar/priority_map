@@ -23,7 +23,7 @@ def parse_args(argv=None):
         ),
     )
     parser.add_argument("--task", default="Find cars")
-    parser.add_argument("--debrief", default="debrief.txt")
+    parser.add_argument("--debrief")
     parser.add_argument("--mask", nargs="*", default=[])
     parser.add_argument("--show", action="store_true")
     parser.add_argument("--panoramic", action="store_true")
