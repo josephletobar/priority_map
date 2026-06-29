@@ -1,7 +1,7 @@
 import numpy as np
 import cv2
 from priority_map.modules.PanoramaBuilder import PanoramaBuilder
-from priority_map.config.params import BLUR_SPREAD
+from priority_map.config import params as config
 
 HEATMAP_PROCESS_SCALE = 1
 LABEL_REFERENCE_HEIGHT = 720
@@ -12,10 +12,10 @@ LABEL_COLOR_MAX_DIVERGENCE = 80.0
 
 
 class Heatmap:
-    def __init__(self):
+    def __init__(self, blur_spread=config.BLUR_SPREAD):
         self.heat_gamma = 1.0
 
-        self.BLUR_SPREAD = BLUR_SPREAD
+        self.BLUR_SPREAD = blur_spread
 
         self.transform_dx = 0
         self.transform_dy = 0

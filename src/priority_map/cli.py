@@ -2,6 +2,7 @@ import argparse
 import time
 
 from priority_map.api import run_priority_map
+from priority_map.config import params as config
 
 
 def parse_args(argv=None):
@@ -25,6 +26,9 @@ def parse_args(argv=None):
     parser.add_argument("--task", default="Find cars")
     parser.add_argument("--debrief")
     parser.add_argument("--mask", nargs="*", default=[])
+    parser.add_argument("--sam-step", type=int, default=config.SAM_STEP)
+    parser.add_argument("--sam-thresh", type=float, default=config.SAM_TRESH)
+    parser.add_argument("--blur-spread", type=float, default=config.BLUR_SPREAD)
     parser.add_argument("--show", action="store_true")
     parser.add_argument("--panoramic", action="store_true")
     parser.add_argument(
@@ -47,6 +51,9 @@ def main(argv=None):
         task=args.task,
         debrief=args.debrief,
         mask=args.mask,
+        sam_step=args.sam_step,
+        sam_thresh=args.sam_thresh,
+        blur_spread=args.blur_spread,
         show=args.show,
         panoramic=args.panoramic,
         graph_agent=args.graph_agent,

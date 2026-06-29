@@ -31,7 +31,7 @@ class Segmentation:
 
 class Segment():
 
-    def __init__(self, show_preview=False):
+    def __init__(self, show_preview=False, sam_thresh=config.SAM_TRESH):
 
         self.segmentations = []
         self.preview_output = VideoOutput(
@@ -42,7 +42,7 @@ class Segment():
         )
 
         overrides = dict(
-            conf=config.SAM_TRESH,
+            conf=sam_thresh,
             task="segment",
             mode="predict",
             model="models/sam3.pt",

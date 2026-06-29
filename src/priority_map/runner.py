@@ -61,6 +61,8 @@ class PriorityMapRunner:
         debrief: str | None = None,
         mask=None,
         sam_step=config.SAM_STEP,
+        sam_thresh=config.SAM_TRESH,
+        blur_spread=config.BLUR_SPREAD,
         show=False,
         record=True,
         panoramic=False,
@@ -72,6 +74,8 @@ class PriorityMapRunner:
         self.task_description = task if not debrief else f"{task}: {debrief}"
         self.masks = mask or []
         self.sam_step = sam_step
+        self.sam_thresh = sam_thresh
+        self.blur_spread = blur_spread
         self.panoramic = panoramic
         
         self.query_csv, self.query_images_dir = self._load_dataset_index()
@@ -83,14 +87,14 @@ class PriorityMapRunner:
         self.observations_csv = self.output_dir / "observations.csv"
 
         self.scene_understanding = SceneUnderstanding()
-        self.segmentation = Segment(show_preview=show)
+        self.segmentation = Segment(show_preview=show, sam_thresh=sam_thresh)
         self.graph_builder = GraphBuilder(output_dir=self.output_dir)
         self.graph_agent = (
             GraphAgent(self.graph_builder, self.task_description)
             if graph_agent
             else None
         )
-        self.heatmap = Heatmap()
+        self.heatmap = Heatmap(blur_spread=blur_spread)
         self.geo_localizer = GeoLocalizer()
         self.masks = {m.lower() for m in self.masks}
         self.video_output = VideoOutput(

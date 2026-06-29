@@ -2,6 +2,7 @@ from pathlib import Path
 
 import cv2
 
+from priority_map.config import params as config
 from priority_map.runner import PriorityMapResult, PriorityMapRunner
 
 
@@ -11,6 +12,9 @@ def run_priority_map(
     task: str = "Find cars",
     debrief: str | None = None,
     mask: list[str] | None = None,
+    sam_step: int = config.SAM_STEP,
+    sam_thresh: float = config.SAM_TRESH,
+    blur_spread: float = config.BLUR_SPREAD,
     show: bool = False,
     record: bool = True,
     panoramic: bool = False,
@@ -22,6 +26,9 @@ def run_priority_map(
         task=task,
         debrief=debrief,
         mask=mask,
+        sam_step=sam_step,
+        sam_thresh=sam_thresh,
+        blur_spread=blur_spread,
         show=show,
         record=record,
         panoramic=panoramic,
