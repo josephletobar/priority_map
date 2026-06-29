@@ -29,6 +29,12 @@ def parse_args(argv=None):
     parser.add_argument("--sam-step", type=int, default=config.SAM_STEP)
     parser.add_argument("--sam-thresh", type=float, default=config.SAM_TRESH)
     parser.add_argument("--blur-spread", type=float, default=config.BLUR_SPREAD)
+    parser.add_argument(
+        "--max-image-edge",
+        type=int,
+        default=config.MAX_IMAGE_EDGE,
+        help="Resize input images so the longest edge is at most this many pixels. Use 0 to disable.",
+    )
     parser.add_argument("--show", action="store_true")
     parser.add_argument("--panoramic", action="store_true")
     parser.add_argument(
@@ -54,6 +60,7 @@ def main(argv=None):
         sam_step=args.sam_step,
         sam_thresh=args.sam_thresh,
         blur_spread=args.blur_spread,
+        max_image_edge=args.max_image_edge,
         show=args.show,
         panoramic=args.panoramic,
         graph_agent=args.graph_agent,

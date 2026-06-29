@@ -9,6 +9,9 @@ LABEL_FONT_MIN_SCALE = 0.10
 LABEL_FONT_GAIN = 1.35
 LABEL_FONT_GAMMA = 2.0
 LABEL_COLOR_MAX_DIVERGENCE = 80.0
+DILATION_EDGE_DIVISOR = 33
+BLUR_REFERENCE_EDGE = 640
+BLUR_EDGE_SCALE = 0.0627
 
 
 class Heatmap:
@@ -47,6 +50,32 @@ class Heatmap:
             return tuple(int(c) for c in score_color)
 
         return tuple(int(c) for c in pulled_color)
+
+    def _odd_kernel_size(self, value, max_size=None):
+        kernel_size = max(3, int(round(value)))
+        if kernel_size % 2 == 0:
+            kernel_size += 1
+
+        if max_size is not None:
+            max_size = max(3, int(max_size))
+            if max_size % 2 == 0:
+                max_size -= 1
+            kernel_size = min(kernel_size, max_size)
+
+        return kernel_size
+
+    def _dilation_iterations(self, image_shape):
+        height, width = image_shape[:2]
+        final_edge = max(height, width)
+        return max(1, int(round(final_edge / DILATION_EDGE_DIVISOR)))
+
+    def _scaled_blur_spread(self, image_shape):
+        height, width = image_shape[:2]
+        final_edge = max(height, width)
+        scaled_spread = self.BLUR_SPREAD + (
+            (final_edge - BLUR_REFERENCE_EDGE) * BLUR_EDGE_SCALE
+        )
+        return max(1.0, scaled_spread)
 
     def _create_heatmap(self, image, regions):
         if not regions: return image, None
@@ -89,18 +118,23 @@ class Heatmap:
                 mask * score
             )
 
-        spread_size = max(3, int(self.BLUR_SPREAD * HEATMAP_PROCESS_SCALE / 15))
-        if spread_size % 2 == 0:
-            spread_size += 1
+        kernel_scale = HEATMAP_PROCESS_SCALE
+        blur_spread = self._scaled_blur_spread(image.shape)
+        spread_size = self._odd_kernel_size(blur_spread * kernel_scale / 15)
 
         kernel = cv2.getStructuringElement(
             cv2.MORPH_ELLIPSE,
             (spread_size, spread_size)
         )
 
-        heatmap = cv2.dilate(heatmap, kernel, iterations=150)
+        heatmap = cv2.dilate(
+            heatmap,
+            kernel,
+            iterations=self._dilation_iterations(image.shape),
+        )
 
-        heatmap = cv2.GaussianBlur(heatmap, (401, 401), 0)
+        gaussian_size = self._odd_kernel_size(blur_spread * kernel_scale, max_size=min(small_size))
+        heatmap = cv2.GaussianBlur(heatmap, (gaussian_size, gaussian_size), 0)
 
         heatmap = np.clip(heatmap, 0, 100)
         heatmap = (heatmap * 2.55).astype(np.uint8)

@@ -63,6 +63,7 @@ class PriorityMapRunner:
         sam_step=config.SAM_STEP,
         sam_thresh=config.SAM_TRESH,
         blur_spread=config.BLUR_SPREAD,
+        max_image_edge=config.MAX_IMAGE_EDGE,
         show=False,
         record=True,
         panoramic=False,
@@ -76,6 +77,7 @@ class PriorityMapRunner:
         self.sam_step = sam_step
         self.sam_thresh = sam_thresh
         self.blur_spread = blur_spread
+        self.max_image_edge = max_image_edge
         self.panoramic = panoramic
         
         self.query_csv, self.query_images_dir = self._load_dataset_index()
@@ -167,6 +169,26 @@ class PriorityMapRunner:
     def should_run_sam(self, frame):
         return frame["frame_index"] % self.sam_step == 0
 
+    def _resize_input_image(self, image):
+        if not self.max_image_edge:
+            return image
+
+        max_edge = int(self.max_image_edge)
+        if max_edge <= 0:
+            return image
+
+        height, width = image.shape[:2]
+        longest_edge = max(height, width)
+        if longest_edge <= max_edge:
+            return image
+
+        scale = max_edge / longest_edge
+        resized_size = (
+            max(1, int(round(width * scale))),
+            max(1, int(round(height * scale))),
+        )
+        return cv2.resize(image, resized_size, interpolation=cv2.INTER_AREA)
+
     def get_next_frame(self):
         while self.has_next():
             frame_index = self.index
@@ -180,6 +202,8 @@ class PriorityMapRunner:
             if image is None:
                 print(f"Skipping unreadable image: {image_path}")
                 continue
+
+            image = self._resize_input_image(image)
 
             image[:, :, 1] = (image[:, :, 1] * 0.65).astype(image.dtype)
             image[:, :, 2:3] = (image[:, :, 2:3] * 0.8).astype(image.dtype)
