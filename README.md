@@ -1,4 +1,4 @@
-﻿# Drone Heatmap
+﻿# Priority Map
 
 ## Quick run
 
