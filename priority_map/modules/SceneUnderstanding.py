@@ -6,7 +6,7 @@ import re
 import time
 from collections import deque
 from openai import OpenAI
-from config.prompts import GPT_VISION_PROMPT
+from priority_map.config.prompts import GPT_VISION_PROMPT
 
 class SceneUnderstanding:
     def __init__(self):

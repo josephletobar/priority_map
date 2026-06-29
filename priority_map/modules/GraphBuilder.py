@@ -7,7 +7,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import networkx as nx
 from pathlib import Path
-from scripts.cluster_segmentations import (
+from priority_map.scripts.cluster_segmentations import (
     ClusteredSegmentation,
     semantic_clustering_with_members,
 )

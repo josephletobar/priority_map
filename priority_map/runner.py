@@ -1,80 +1,72 @@
 import os
 
-from attr import dataclass
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 
-import atexit
-import argparse
-import signal
-import time
 from pathlib import Path
+from dataclasses import dataclass
+import csv
+import time
+
 import cv2
 import pandas as pd
-import traceback
-import csv
 from dotenv import load_dotenv
-import config.params as config
-from scripts.video_helper import (
+
+from priority_map.config import params as config
+from priority_map.scripts.video_helper import (
     label_mask,
     safe_imwrite,
     VideoOutput,
 )
-from scripts.cluster_segmentations import cluster_segmentations, ClusteredSegmentation
+from priority_map.scripts.cluster_segmentations import cluster_segmentations
 
-from modules.SceneUnderstanding import SceneUnderstanding
-from modules.Heatmap import Heatmap
-from modules.Segment import Segment
-from modules.GraphBuilder import GraphBuilder
-from modules.GraphAgent import GraphAgent
-# from modules.GraphChat import ChatWithGraph
-from modules.GeoLocalizer import GeoLocalizer
-from modules.PanoramaBuilder import PanoramaBuilder
+from priority_map.modules.SceneUnderstanding import SceneUnderstanding
+from priority_map.modules.Heatmap import Heatmap
+from priority_map.modules.Segment import Segment
+from priority_map.modules.GraphBuilder import GraphBuilder
+from priority_map.modules.GraphAgent import GraphAgent
+from priority_map.modules.GeoLocalizer import GeoLocalizer
+from priority_map.modules.PanoramaBuilder import PanoramaBuilder
 
 load_dotenv()
 
-def parse_args():
-    parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "image_folder",
-        nargs="?",
-        help="Folder of images to process.",
-    )
-    parser.add_argument(
-        "--dataset-root",
-        # default=r"D:\Train\Train\query_images",
-        # default = r"C:\Users\jletobar3\Projects\dronevid2",
-        default = r"D:\UAV_VisLoc_dataset\05\drone",
-        help="Dataset root. Supports plain image folder.",
-    )
-    parser.add_argument("--task", default="Find cars")
-    parser.add_argument("--debrief", default = "debrief.txt")
-    parser.add_argument("--mask", nargs="*", default=[])
-    parser.add_argument("--show", action="store_true")
-    parser.add_argument("--record", action="store_true")
-    parser.add_argument("--panoramic", action="store_true")
-    parser.add_argument(
-        "--graph_agent",
-        "--graph-agent",
-        action="store_true",
-        help="Enable the asynchronous graph agent. Off by default.",
-    )
-    return parser.parse_args()
+
+DEFAULT_IMAGE_FOLDER = Path(r"D:\UAV_VisLoc_dataset\05\drone")
+# DEFAULT_IMAGE_FOLDER = Path(r"D:\Train\Train\query_images")
+# DEFAULT_IMAGE_FOLDER = Path(r"C:\Users\jletobar3\Projects\dronevid2")
 
 
-class DroneHeatmap:
+def default_image_folder() -> Path:
+    return DEFAULT_IMAGE_FOLDER
+
+
+def default_output_dir() -> Path:
+    return Path("examples") / time.strftime("%Y-%m-%d_%H-%M-%S")
+
+
+@dataclass
+class PriorityMapResult:
+    output_dir: Path
+    observations_csv: Path
+    video_path: Path | None
+    heatmap_video_path: Path | None
+    frames_processed: int
+
+
+class PriorityMapRunner:
     def __init__(
         self,
-        dataset_root: str,
+        image_folder: str | Path | None = None,
+        output_dir: str | Path | None = None,
         task="Find cars",
         debrief="debrief.txt",
         mask=None,
         sam_step=config.SAM_STEP,
         show=False,
-        record=False,
+        record=True,
         panoramic=False,
         graph_agent=False,
     ):
-        self.dataset_root = Path(dataset_root)
+        self.dataset_root = Path(image_folder) if image_folder is not None else default_image_folder()
         self.task = task
         self.debrief = debrief
         self.masks = mask or []
@@ -84,8 +76,10 @@ class DroneHeatmap:
         self.query_csv, self.query_images_dir = self._load_dataset_index()
 
         self.index = 0
-        self.output_dir = Path("examples") / time.strftime("%Y-%m-%d_%H-%M-%S")
+        self.frames_processed = 0
+        self.output_dir = Path(output_dir) if output_dir is not None else default_output_dir()
         self.output_dir.mkdir(parents=True, exist_ok=True)
+        self.observations_csv = self.output_dir / "observations.csv"
 
         self.scene_understanding = SceneUnderstanding()
         self.segmentation = Segment(show_preview=show)
@@ -198,7 +192,7 @@ class DroneHeatmap:
 
         return None
     
-    def close_video(self):
+    def close(self):
         if self._closed:
             return
 
@@ -256,7 +250,7 @@ class DroneHeatmap:
         clustered = cluster_segmentations(segmentations)
 
         # Set Where to Save Observations CSV
-        csv_path = Path(f"{self.output_dir}/observations.csv")
+        csv_path = self.observations_csv
         if not csv_path.exists():
             with csv_path.open("w", newline="") as f:
                 writer = csv.writer(f)
@@ -289,8 +283,9 @@ class DroneHeatmap:
             )
 
         # Save Heatmap Individual Heatmap Images
-        os.makedirs(f"{self.output_dir}/heatmap_imgs", exist_ok=True)
-        safe_imwrite(f"{self.output_dir}/heatmap_imgs/{self.image_name}", heatmap_only)
+        heatmap_images_dir = self.output_dir / "heatmap_imgs"
+        heatmap_images_dir.mkdir(parents=True, exist_ok=True)
+        safe_imwrite(str(heatmap_images_dir / str(self.image_name)), heatmap_only)
 
         if scene_dict is not None:
             self.graph_builder.add_nodes(clustered)
@@ -309,14 +304,16 @@ class DroneHeatmap:
         # Create Panoramic Images (If Enabled, Experimental)
         if self.panoramic:
             panorama_save = 10
-            os.makedirs(f"{self.output_dir}/heat_panorama", exist_ok=True)
-            os.makedirs(f"{self.output_dir}/panorama", exist_ok=True)
+            heat_panorama_dir = self.output_dir / "heat_panorama"
+            panorama_dir = self.output_dir / "panorama"
+            heat_panorama_dir.mkdir(parents=True, exist_ok=True)
+            panorama_dir.mkdir(parents=True, exist_ok=True)
             transform = self.segmentation.transform_dx, self.segmentation.transform_dy
 
             # Base image panorama
             panorama = self.panoramic_builder.create_panorama(transform, image)
             if self.index % panorama_save == 0:
-                safe_imwrite(f"{self.output_dir}/panorama/panorama_{self.index}.png", panorama)
+                safe_imwrite(str(panorama_dir / f"panorama_{self.index}.png"), panorama)
 
             # Heatmap overlay panorama
             heat_panorama = self.heat_panoramic_builder.create_panorama(transform, heatmap_only)
@@ -330,7 +327,7 @@ class DroneHeatmap:
                     0         # constant brightness offset added to every pixel
                 )
                 if self.index % panorama_save == 0:
-                    safe_imwrite(f"{self.output_dir}/heat_panorama/heat_panorama_{self.index}.png", heat_panorama)
+                    safe_imwrite(str(heat_panorama_dir / f"heat_panorama_{self.index}.png"), heat_panorama)
 
 
         # Write Output Frame To Video
@@ -342,6 +339,7 @@ class DroneHeatmap:
             side_header=f"Mask(s): {', '.join(sorted(self.masks)) or 'None'}",
         )
         self._handle_graph_view_key()
+        self.frames_processed += 1
         return keep_running
 
     def _handle_graph_view_key(self):
@@ -365,78 +363,10 @@ class DroneHeatmap:
         while self.has_next():
             if not self.run_frame():
                 break
-
-# def run_graph_chat(drone):
-#     graph = drone.graph_builder._build_topology().copy()
-#     chat = ChatWithGraph(graph)
-#     chat.run()
-
-
-def main():
-
-    t0 = time.perf_counter()
-    drone = None
-    cleaned_up = False
-
-    def cleanup():
-        nonlocal cleaned_up
-        if cleaned_up:
-            return
-
-        cleaned_up = True
-        if drone is not None:
-            drone.close_video()
-        try:
-            cv2.destroyAllWindows()
-            cv2.waitKey(1)
-        except cv2.error as exc:
-            print(f"Cleanup warning (OpenCV windows): {exc}")
-
-    atexit.register(cleanup)
-    previous_sigint = signal.getsignal(signal.SIGINT)
-
-    def handle_sigint(signum, frame):
-        print("\nInterrupted. Cleaning up video resources...")
-        cleanup()
-        raise KeyboardInterrupt
-
-    signal.signal(signal.SIGINT, handle_sigint)
-    
-    try:
-        args = parse_args()
-        dataset_root = args.image_folder or args.dataset_root
-        drone = DroneHeatmap(
-            dataset_root,
-            task=args.task,
-            debrief=args.debrief,
-            mask=args.mask,
-            show=args.show,
-            record=args.record,
-            panoramic=args.panoramic,
-            graph_agent=args.graph_agent,
+        return PriorityMapResult(
+            output_dir=self.output_dir,
+            observations_csv=self.observations_csv,
+            video_path=self.video_output.video_path,
+            heatmap_video_path=self.heatmap_video_output.video_path,
+            frames_processed=self.frames_processed,
         )
-
-        drone.run()
-
-    except KeyboardInterrupt:
-        pass
-
-    except Exception:
-        traceback.print_exc()
-
-    finally:
-        cleanup()
-        signal.signal(signal.SIGINT, previous_sigint)
-        try:
-            atexit.unregister(cleanup)
-        except ValueError:
-            pass
-        # if args.chat:
-        #     run_graph_chat(drone)
-        # drone.graph_builder.draw_3d_graph()
-
-        print(f"Total time: {(time.perf_counter() - t0):.2f} seconds")
-
-
-if __name__ == "__main__":
-    main()

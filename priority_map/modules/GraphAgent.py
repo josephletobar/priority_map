@@ -5,7 +5,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import requests
 import networkx as nx
-from config.prompts import GRAPH_AGENT_PROMPT
+from priority_map.config.prompts import GRAPH_AGENT_PROMPT
 
 
 class GraphAgent:

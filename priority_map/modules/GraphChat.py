@@ -1,10 +1,10 @@
 import json
 from dotenv import load_dotenv
-from modules.GraphBuilder import GraphBuilder
+from priority_map.modules.GraphBuilder import GraphBuilder
 
 # Old project imports for embedding/RAG retrieval. Current heatmap graph only has
 # node id, label, score, and simple edges.
-# from scripts.get_embedding import embed_text
+# from priority_map.scripts.get_embedding import embed_text
 # import numpy as np
 # from sklearn.metrics.pairwise import cosine_similarity
 # import spacy

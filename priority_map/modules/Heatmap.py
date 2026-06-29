@@ -1,7 +1,7 @@
 import numpy as np
 import cv2
-from modules.PanoramaBuilder import PanoramaBuilder
-from config.params import BLUR_SPREAD
+from priority_map.modules.PanoramaBuilder import PanoramaBuilder
+from priority_map.config.params import BLUR_SPREAD
 
 HEATMAP_PROCESS_SCALE = 1
 LABEL_REFERENCE_HEIGHT = 720

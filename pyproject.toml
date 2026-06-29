@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "priority_map"
+version = "0.1.0"
+description = "Drone image priority mapping and heatmap generation."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "attrs",
+    "matplotlib",
+    "networkx",
+    "numpy",
+    "openai",
+    "opencv-python",
+    "pandas",
+    "pillow",
+    "python-dotenv",
+    "requests",
+    "scikit-learn",
+    "torch",
+    "ultralytics",
+]
+
+[project.scripts]
+priority-map = "priority_map.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["priority_map*"]

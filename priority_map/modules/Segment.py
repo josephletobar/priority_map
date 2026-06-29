@@ -3,9 +3,9 @@ from ultralytics.models.sam import SAM3SemanticPredictor
 import cv2
 from dataclasses import dataclass
 import time
-from modules.PanoramaBuilder import PanoramaBuilder
-from scripts.video_helper import VideoOutput
-import config.params as config
+from priority_map.modules.PanoramaBuilder import PanoramaBuilder
+from priority_map.scripts.video_helper import VideoOutput
+from priority_map.config import params as config
 
 FLOW_SCALE = 0.05
 SAM3_PREVIEW_MARGIN = 120

@@ -335,7 +335,7 @@ def main():
     )
 
     print(f"Dataset root: {dataset_root}")
-    print(f"Processing {len(selected_images)} image(s) sampled from main.py's query image source:")
+    print(f"Processing {len(selected_images)} image(s) sampled from the query image source:")
     for image_path in selected_images:
         print(f"  - {image_path}")
     print()
