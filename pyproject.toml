@@ -28,4 +28,5 @@ dependencies = [
 priority-map = "priority_map.cli:main"
 
 [tool.setuptools.packages.find]
+where = ["src"]
 include = ["priority_map*"]
