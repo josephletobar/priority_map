@@ -1,9 +1,7 @@
 from dataclasses import dataclass
-import os
 import re
 
 import numpy as np
-import requests
 from sklearn.cluster import DBSCAN
 
 
@@ -78,20 +76,6 @@ def cluster_segmentations(segmentations, distance_threshold=150):
 
     return clustered
 
-LABEL_PROMPT = """
-Observed labels: {labels}
-
-Given only these observed labels, choose the most likely scene type.
-
-Allowed scene types:
-residential area, rural area, dense forest, park, road network
-
-Return only one label.
-"""
-
-_SEMANTIC_LABEL_CACHE = {}
-
-
 def _normalize_semantic_label_input(label):
     label = str(label).strip().lower()
     label = re.sub(r'\bx\d+\b', ' ', label)
@@ -138,52 +122,33 @@ def _semantic_label_inputs(labels):
     return tuple(sorted(normalized))
 
 
-def _sanitize_semantic_label(label):
-    label = str(label).strip().lower()
-    label = re.sub(r'[^a-z0-9\s-]', '', label)
-    words = [word for word in re.split(r'\s+', label) if word]
-    if not words or len(words) > 2:
-        return None
-    return " ".join(words)
-
-
 def _semantic_label(cluster_segs):
-    unique_labels = _semantic_label_inputs(seg.label for seg in cluster_segs)
-    if not unique_labels:
+    label_scores = {}
+    label_counts = {}
+    first_seen = {}
+
+    for index, seg in enumerate(cluster_segs):
+        label = _normalize_semantic_label_input(seg.label)
+        if not label:
+            continue
+
+        count = max(1, int(getattr(seg, "count", 1) or 1))
+        score = max(0.0, float(getattr(seg, "score", 0.0) or 0.0))
+        label_scores[label] = label_scores.get(label, 0.0) + count * score
+        label_counts[label] = label_counts.get(label, 0) + count
+        first_seen.setdefault(label, index)
+
+    if not label_scores:
         return None
-    if len(unique_labels) == 1:
-        return unique_labels[0]
 
-    if unique_labels in _SEMANTIC_LABEL_CACHE:
-        return _SEMANTIC_LABEL_CACHE[unique_labels]
-
-    model = os.getenv("SEMANTIC_CLUSTER_MODEL", "gemma3:1b")
-    ollama_url = os.getenv("OLLAMA_GENERATE_URL", "http://localhost:11434/api/generate")
-    timeout = int(os.getenv("SEMANTIC_CLUSTER_TIMEOUT", "20"))
-    keep_alive = os.getenv("SEMANTIC_CLUSTER_KEEP_ALIVE", "5m")
-
-    try:
-        response = requests.post(
-            ollama_url,
-            json={
-                "model": model,
-                "prompt": LABEL_PROMPT.format(labels=", ".join(unique_labels)),
-                "stream": False,
-                "keep_alive": keep_alive,
-                "options": {
-                    "temperature": 0,
-                },
-            },
-            timeout=timeout,
-        )
-        response.raise_for_status()
-        result = response.json()
-        label = _sanitize_semantic_label(result.get("response", ""))
-    except Exception:
-        label = None
-
-    _SEMANTIC_LABEL_CACHE[unique_labels] = label
-    return label
+    return max(
+        label_scores,
+        key=lambda label: (
+            label_scores[label],
+            label_counts[label],
+            -first_seen[label],
+        ),
+    )
 
 
 def _score_weighted_distances(clustered_segmentations, score_weight):

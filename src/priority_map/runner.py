@@ -31,9 +31,9 @@ from priority_map.modules.PanoramaBuilder import PanoramaBuilder
 load_dotenv()
 
 
-DEFAULT_IMAGE_FOLDER = Path(r"D:\UAV_VisLoc_dataset\05\drone")
+# DEFAULT_IMAGE_FOLDER = Path(r"D:\UAV_VisLoc_dataset\05\drone")
 # DEFAULT_IMAGE_FOLDER = Path(r"D:\Train\Train\query_images")
-# DEFAULT_IMAGE_FOLDER = Path(r"C:\Users\jletobar3\Projects\dronevid2")
+DEFAULT_IMAGE_FOLDER = Path(r"C:\Users\jletobar3\Projects\dronevid2")
 
 
 def default_output_dir() -> Path:
@@ -418,13 +418,7 @@ class PriorityMapRunner:
             self.last_graph_frame = graph_frame
         print(f"Graph view: {self.graph_view}")
 
-    def run(self):
-        while self.has_next():
-            frame_result = self.run_frame()
-
-            
-            if not frame_result.keep_running:
-                break
+    def result(self):
         return PriorityMapResult(
             output_dir=self.output_dir,
             observations_csv=self.observations_csv,
@@ -432,3 +426,10 @@ class PriorityMapRunner:
             heatmap_video_path=self.heatmap_video_output.video_path,
             frames_processed=self.frames_processed,
         )
+
+    def run(self):
+        while self.has_next():
+            frame_result = self.run_frame()
+            if not frame_result.keep_running:
+                break
+        return self.result()
