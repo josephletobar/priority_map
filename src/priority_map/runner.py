@@ -8,6 +8,7 @@ import csv
 import time
 
 import cv2
+import numpy as np
 import pandas as pd
 from dotenv import load_dotenv
 
@@ -35,10 +36,6 @@ DEFAULT_IMAGE_FOLDER = Path(r"D:\UAV_VisLoc_dataset\05\drone")
 # DEFAULT_IMAGE_FOLDER = Path(r"C:\Users\jletobar3\Projects\dronevid2")
 
 
-def default_image_folder() -> Path:
-    return DEFAULT_IMAGE_FOLDER
-
-
 def default_output_dir() -> Path:
     return Path("examples") / time.strftime("%Y-%m-%d_%H-%M-%S")
 
@@ -50,6 +47,19 @@ class PriorityMapResult:
     video_path: Path | None
     heatmap_video_path: Path | None
     frames_processed: int
+
+
+@dataclass
+class PriorityFrameResult:
+    image_name: str | None
+    image_path: str | None
+    frame_index: int | None
+    heatmap_only: np.ndarray | None
+    output_frame: np.ndarray | None
+    keep_running: bool
+
+    def __bool__(self):
+        return self.keep_running
 
 
 class PriorityMapRunner:
@@ -70,7 +80,7 @@ class PriorityMapRunner:
         panoramic=False,
         graph_agent=False,
     ):
-        self.dataset_root = Path(image_folder) if image_folder is not None else default_image_folder()
+        self.dataset_root = Path(image_folder) if image_folder is not None else DEFAULT_IMAGE_FOLDER
         self.task = task
         self.debrief = debrief
         self.task_description = task if not debrief else f"{task}: {debrief}"
@@ -260,7 +270,14 @@ class PriorityMapRunner:
 
         frame = self.get_next_frame()
         if frame is None:
-            return False
+            return PriorityFrameResult(
+                image_name=None,
+                image_path=None,
+                frame_index=None,
+                heatmap_only=None,
+                output_frame=None,
+                keep_running=False,
+            )
 
         image = frame["image"]
         out = image
@@ -375,7 +392,14 @@ class PriorityMapRunner:
         )
         self._handle_graph_view_key()
         self.frames_processed += 1
-        return keep_running
+        return PriorityFrameResult(
+            image_name=str(self.image_name),
+            image_path=frame["image_path"],
+            frame_index=frame["frame_index"],
+            heatmap_only=heatmap_only,
+            output_frame=out,
+            keep_running=keep_running,
+        )
 
     def _handle_graph_view_key(self):
         key = self.video_output.last_key
@@ -396,7 +420,10 @@ class PriorityMapRunner:
 
     def run(self):
         while self.has_next():
-            if not self.run_frame():
+            frame_result = self.run_frame()
+
+            
+            if not frame_result.keep_running:
                 break
         return PriorityMapResult(
             output_dir=self.output_dir,
