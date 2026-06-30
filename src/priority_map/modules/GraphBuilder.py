@@ -19,11 +19,12 @@ class GraphBuilder:
     SEMANTIC_K_NEAREST = 2
     SEMANTIC_SCORE_WEIGHT_GAMMA = 2.0
 
-    def __init__(self, output_dir, graph_view="semantic"):
+    def __init__(self, output_dir, graph_view="semantic", debug=False):
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.db_path = self.output_dir / "graph.db"
         self.graph_view = graph_view
+        self.debug = debug
 
         # print(f"GraphBuilder DB path: {self.db_path}")
         # print(f"DB file exists before connect: {self.db_path.exists()}")
@@ -561,7 +562,10 @@ class GraphBuilder:
         if not candidate_clusters:
             return
 
-        semantic_groups = semantic_clustering_with_members(candidate_clusters)
+        semantic_groups = semantic_clustering_with_members(
+            candidate_clusters,
+            debug=self.debug,
+        )
         for semantic_cluster, member_clusters in semantic_groups:
             base_node_ids = {
                 member.base_node_id

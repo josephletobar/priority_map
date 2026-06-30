@@ -36,7 +36,7 @@ def parse_args(argv=None):
         default=config.MAX_IMAGE_EDGE,
         help="Resize input images so the longest edge is at most this many pixels. Use 0 to disable.",
     )
-    parser.add_argument("--show", action="store_true")
+    parser.add_argument("--debug", action="store_true")
     parser.add_argument("--panoramic", action="store_true")
     parser.add_argument(
         "--graph_agent",
@@ -63,12 +63,13 @@ def main(argv=None):
         blur_spread=args.blur_spread,
         max_image_edge=args.max_image_edge,
         sam_model_path=args.sam_model_path,
-        show=args.show,
+        debug=args.debug,
         panoramic=args.panoramic,
         graph_agent=args.graph_agent,
     )
 
-    print(f"Output written to: {result.output_dir}")
-    print(f"Frames processed: {result.frames_processed}")
-    print(f"Total time: {(time.perf_counter() - t0):.2f} seconds")
+    if args.debug:
+        print(f"Output written to: {result.output_dir}")
+        print(f"Frames processed: {result.frames_processed}")
+        print(f"Total time: {(time.perf_counter() - t0):.2f} seconds")
     return result

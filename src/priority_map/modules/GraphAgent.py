@@ -16,9 +16,11 @@ class GraphAgent:
         node_growth_threshold=30,
         review_hop_cutoff=1,
         model=None,
+        debug=False,
     ):
         self.graph_builder = graph_builder
         self.task_description = task_description
+        self.debug = debug
         self.node_growth_threshold = node_growth_threshold
         self.review_hop_cutoff = int(os.getenv("GRAPH_AGENT_REVIEW_HOP_CUTOFF", review_hop_cutoff))
         self.model = model or os.getenv("GRAPH_AGENT_MODEL", "phi4-mini-reasoning")
@@ -28,6 +30,10 @@ class GraphAgent:
         self.timeout = int(os.getenv("GRAPH_AGENT_TIMEOUT", "120"))
         self.executor = ThreadPoolExecutor(max_workers=1)
         self.future = None
+
+    def _debug_print(self, *args, **kwargs):
+        if self.debug:
+            print(*args, **kwargs)
 
     def should_run(self):
         """Check if enough unreviewed nodes exist to trigger reasoning."""
@@ -100,9 +106,9 @@ class GraphAgent:
             indent=2
         )
 
-        print(f"\n=== Sent Graph ===")
-        print(graph_json)
-        print(f"=== End Graph ===\n")
+        self._debug_print(f"\n=== Sent Graph ===")
+        self._debug_print(graph_json)
+        self._debug_print(f"=== End Graph ===\n")
 
         return GRAPH_AGENT_PROMPT.format(
             task_description=self.task_description,
@@ -157,10 +163,10 @@ class GraphAgent:
             run["node_ids"],
             run["view"],
         )
-        print(f"\n=== Graph Agent ===")
-        print(f"Model: {self.model}")
-        print(f"Started async inference for {len(run['node_ids'])} node(s)")
-        print(f"=== End Graph Agent ===\n")
+        self._debug_print(f"\n=== Graph Agent ===")
+        self._debug_print(f"Model: {self.model}")
+        self._debug_print(f"Started async inference for {len(run['node_ids'])} node(s)")
+        self._debug_print(f"=== End Graph Agent ===\n")
         return True
 
     def poll_finished(self):
@@ -171,9 +177,9 @@ class GraphAgent:
         try:
             result = self.future.result()
         except Exception as e:
-            print(f"\n=== Graph Agent ===")
-            print(f"Async error: {e}")
-            print(f"=== End Graph Agent ===\n")
+            self._debug_print(f"\n=== Graph Agent ===")
+            self._debug_print(f"Async error: {e}")
+            self._debug_print(f"=== End Graph Agent ===\n")
             self.future = None
             return True
 
@@ -251,18 +257,18 @@ class GraphAgent:
 
     def _handle_model_result(self, response, raw_output, elapsed, node_ids, view):
         """Apply model output to SQLite. Must run on the main thread."""
-        print(f"\n=== Graph Agent ===")
-        print(f"Model: {self.model}")
-        print(f"Inference time: {elapsed:.2f} seconds\n")
+        self._debug_print(f"\n=== Graph Agent ===")
+        self._debug_print(f"Model: {self.model}")
+        self._debug_print(f"Inference time: {elapsed:.2f} seconds\n")
 
         if response is None:
-            print(f"Raw:\n{raw_output}\n")
-            print(f"=== End Graph Agent ===\n")
+            self._debug_print(f"Raw:\n{raw_output}\n")
+            self._debug_print(f"=== End Graph Agent ===\n")
             return
 
         reasoning = response.get("reasoning", "")
         if reasoning:
-            print(f"Reasoning: {reasoning}\n")
+            self._debug_print(f"Reasoning: {reasoning}\n")
 
         updates = response.get("updates", [])
         changes = self._update_scores(updates, view)
@@ -270,11 +276,11 @@ class GraphAgent:
 
         if changes:
             for node_id, old, new in changes:
-                print(f"  {node_id}: {old:.0f}→{new:.0f}")
+                self._debug_print(f"  {node_id}: {old:.0f}→{new:.0f}")
         else:
-            print(f"Updates: None")
+            self._debug_print(f"Updates: None")
 
-        print(f"=== End Graph Agent ===\n")
+        self._debug_print(f"=== End Graph Agent ===\n")
 
     def update_priorities(self):
         """Synchronous graph-agent run for compatibility."""
@@ -291,9 +297,9 @@ class GraphAgent:
         """Drain any running async job before shutdown."""
         if self.future is not None:
             if not self.future.done():
-                print("\n=== Graph Agent ===")
-                print("Waiting for async inference to finish before shutdown")
-                print("=== End Graph Agent ===\n")
+                self._debug_print("\n=== Graph Agent ===")
+                self._debug_print("Waiting for async inference to finish before shutdown")
+                self._debug_print("=== End Graph Agent ===\n")
             while self.future is not None and not self.future.done():
                 time.sleep(0.1)
             self.poll_finished()

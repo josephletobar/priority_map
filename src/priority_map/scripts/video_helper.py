@@ -68,7 +68,7 @@ def _prepare_video_frame(image, frame_size=None):
     return np.ascontiguousarray(image)
 
 
-def create_video_writer(image, output_dir="examples", filename="video.avi", fps=30):
+def create_video_writer(image, output_dir="examples", filename="video.avi", fps=30, debug=False):
     image = _prepare_video_frame(image)
     height, width = image.shape[:2]
     frame_size = (width, height)
@@ -80,7 +80,8 @@ def create_video_writer(image, output_dir="examples", filename="video.avi", fps=
         video_writer = cv2.VideoWriter(str(output_path), fourcc, fps, frame_size)
 
         if video_writer.isOpened():
-            print(f"Recording video to {output_path} using {codec}")
+            if debug:
+                print(f"Recording video to {output_path} using {codec}")
             return video_writer, output_path, frame_size
 
         video_writer.release()
@@ -98,7 +99,7 @@ def release_video_writer(video_writer):
         video_writer.release()
 
 
-def get_video_writer(video_writer, image, output_dir, filename="video.avi", frame_size=None):
+def get_video_writer(video_writer, image, output_dir, filename="video.avi", frame_size=None, debug=False):
     if video_writer is not None:
         return (
             video_writer,
@@ -111,6 +112,7 @@ def get_video_writer(video_writer, image, output_dir, filename="video.avi", fram
         image,
         output_dir=output_dir,
         filename=filename,
+        debug=debug,
     )
     return (
         video_writer,
@@ -226,6 +228,7 @@ def _handle_video_frame(
     video_frame_size=None,
     window_name=None,
     margin=PREVIEW_MARGIN,
+    debug=False,
 ):
     key = -1
     image = compose_video_frame(
@@ -243,6 +246,7 @@ def _handle_video_frame(
             output_dir,
             filename=filename,
             frame_size=video_frame_size,
+            debug=debug,
         )
         video_writer.write(video_frame)
 
@@ -264,6 +268,7 @@ class VideoOutput:
         filename="video.avi",
         window_name=None,
         margin=PREVIEW_MARGIN,
+        debug=False,
     ):
         self.output_dir = output_dir
         self.show = show
@@ -271,6 +276,7 @@ class VideoOutput:
         self.filename = filename
         self.window_name = window_name
         self.margin = margin
+        self.debug = debug
         self.video_writer = None
         self.video_path = None
         self.video_frame_size = None
@@ -290,6 +296,7 @@ class VideoOutput:
             video_frame_size=self.video_frame_size,
             window_name=self.window_name,
             margin=self.margin,
+            debug=self.debug,
         )
         self.last_key = key
         if video_path is not None:
@@ -350,6 +357,7 @@ def label_mask(masks: list[str], image: np.ndarray, segmentations: list):
 
 def safe_imwrite(path: str, image: np.ndarray, max_dim: int = 8000) -> bool:
     if image is None:
+        print(f"Failed to save {path}: image is None")
         return False
 
     h, w = image.shape[:2]
@@ -370,7 +378,10 @@ def safe_imwrite(path: str, image: np.ndarray, max_dim: int = 8000) -> bool:
         )
 
     try:
-        return cv2.imwrite(path, image)
+        saved = cv2.imwrite(path, image)
+        if not saved:
+            print(f"Failed to save {path}: cv2.imwrite returned False")
+        return saved
     except Exception as e:
         print(f"Failed to save {path}: {e}")
         return False

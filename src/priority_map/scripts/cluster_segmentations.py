@@ -193,7 +193,7 @@ def semantic_cluster_from_members(cluster_segs):
     )
 
 
-def semantic_clustering_with_members(clustered_segmentations, distance_threshold=450, score_weight=3.5):
+def semantic_clustering_with_members(clustered_segmentations, distance_threshold=450, score_weight=3.5, debug=False):
     """Spatially merge existing clusters and return semantic clusters with members.
 
     Args:
@@ -232,9 +232,10 @@ def semantic_clustering_with_members(clustered_segmentations, distance_threshold
         prompt_labels = _semantic_label_inputs(seg.label for seg in cluster_segs)
         semantic_cluster = semantic_cluster_from_members(cluster_segs)
 
-        print("Semantic clustering:")
-        print(f"labels used for {semantic_cluster.label}:", list(prompt_labels))
-        print("----------------------")
+        if debug:
+            print("Semantic clustering:")
+            print(f"labels used for {semantic_cluster.label}:", list(prompt_labels))
+            print("----------------------")
 
         semantic_clustered.append((
             semantic_cluster,
@@ -244,7 +245,7 @@ def semantic_clustering_with_members(clustered_segmentations, distance_threshold
     return semantic_clustered
 
 
-def semantic_clustering(clustered_segmentations, distance_threshold=2000, score_weight=2.0):
+def semantic_clustering(clustered_segmentations, distance_threshold=2000, score_weight=2.0, debug=False):
     """Spatially merge existing clusters and label each merged cluster semantically."""
     return [
         semantic_cluster
@@ -252,5 +253,6 @@ def semantic_clustering(clustered_segmentations, distance_threshold=2000, score_
             clustered_segmentations,
             distance_threshold=distance_threshold,
             score_weight=score_weight,
+            debug=debug,
         )
     ]

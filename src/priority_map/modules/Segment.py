@@ -29,22 +29,30 @@ class Segmentation:
     centroid: tuple[int, int] | None = None
     geo_pos: tuple[float, float, float] | None = None
 
+
+@dataclass
+class SegmentationResult:
+    segmentations: list[Segmentation]
+    sam3_seconds: float
+
+
 class Segment():
 
     def __init__(
         self,
-        show_preview=False,
+        debug=False,
         sam_thresh=config.SAM_TRESH,
         sam_model_path=config.SAM_MODEL_PATH,
     ):
 
         self.segmentations = []
         self.preview_output = VideoOutput(
-            show=show_preview,
+            show=debug,
             record=False,
             window_name="SAM3 Segmentation",
             margin=SAM3_PREVIEW_MARGIN,
         )
+        self.debug = debug
 
         overrides = dict(
             conf=sam_thresh,
@@ -53,6 +61,7 @@ class Segment():
             model=str(sam_model_path),
             # half=True,  # Use FP16 for faster inference
             save=False,
+            verbose=debug,
         )
         self.predictor = SAM3SemanticPredictor(overrides=overrides)
 
@@ -177,6 +186,7 @@ class Segment():
         return new_x, new_y
 
     def get_segmentations(self, image, scene_dict):
+        sam3_seconds = 0.0
         image_height, image_width = image.shape[:2]
         curr_gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
 
@@ -210,17 +220,20 @@ class Segment():
 
             if len(prompts) >= 1:
                 sam_image = _resize_for_sam(image)
+                t0 = time.perf_counter()
+                if getattr(self.predictor, "model", None) is None:
+                    self.predictor.setup_model(verbose=self.debug)
                 results = self.predictor(sam_image, text=prompts)
+                sam3_seconds = time.perf_counter() - t0
                 if results:
                     result = results[0]
 
-                    annotated = result.plot()
-
-                    # if self.preview_output.show:
-                    #     self.preview_output.handle_frame(
-                    #         annotated,
-                    #         header="SAM3 Segmentation",
-                    #     )
+                    if self.preview_output.show:
+                        annotated = result.plot()
+                        self.preview_output.handle_frame(
+                            annotated,
+                            header="SAM3 Segmentation",
+                        )
         
                     if result.masks is not None:
                         masks = result.masks.data.cpu().numpy()  # (N, H, W)
@@ -254,4 +267,7 @@ class Segment():
                             )
 
         self.prev_gray = curr_gray
-        return self.segmentations
+        return SegmentationResult(
+            segmentations=self.segmentations,
+            sam3_seconds=sam3_seconds,
+        )

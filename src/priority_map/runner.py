@@ -56,6 +56,7 @@ class PriorityFrameResult:
     frame_index: int | None
     heatmap_only: np.ndarray | None
     output_frame: np.ndarray | None
+    latency_seconds: dict[str, float]
     keep_running: bool
 
     def __bool__(self):
@@ -75,7 +76,7 @@ class PriorityMapRunner:
         blur_spread=config.BLUR_SPREAD,
         max_image_edge=config.MAX_IMAGE_EDGE,
         sam_model_path=config.SAM_MODEL_PATH,
-        show=False,
+        debug=False,
         record=True,
         panoramic=False,
         graph_agent=False,
@@ -91,6 +92,7 @@ class PriorityMapRunner:
         self.max_image_edge = max_image_edge
         self.sam_model_path = sam_model_path
         self.panoramic = panoramic
+        self.debug = debug
         
         self.query_csv, self.query_images_dir = self._load_dataset_index()
 
@@ -100,15 +102,15 @@ class PriorityMapRunner:
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.observations_csv = self.output_dir / "observations.csv"
 
-        self.scene_understanding = SceneUnderstanding()
+        self.scene_understanding = SceneUnderstanding(debug=debug)
         self.segmentation = Segment(
-            show_preview=show,
+            debug=debug,
             sam_thresh=sam_thresh,
             sam_model_path=sam_model_path,
         )
-        self.graph_builder = GraphBuilder(output_dir=self.output_dir)
+        self.graph_builder = GraphBuilder(output_dir=self.output_dir, debug=debug)
         self.graph_agent = (
-            GraphAgent(self.graph_builder, self.task_description)
+            GraphAgent(self.graph_builder, self.task_description, debug=debug)
             if graph_agent
             else None
         )
@@ -117,10 +119,11 @@ class PriorityMapRunner:
         self.masks = {m.lower() for m in self.masks}
         self.video_output = VideoOutput(
             output_dir=self.output_dir,
-            show=show,
+            show=debug,
             record=record,
             filename="video.avi",
             window_name="Drone Heatmap",
+            debug=debug,
         )
         self.heatmap_video_output = VideoOutput(
             output_dir=self.output_dir,
@@ -128,11 +131,11 @@ class PriorityMapRunner:
             record=record,
             filename="heatmap.avi",
             window_name="Heatmap Only",
+            debug=debug,
         )
 
         self.heat_panoramic_builder = PanoramaBuilder(alpha=0.9)
         self.panoramic_builder = PanoramaBuilder(alpha=0.15)
-        self.show = show
         self.last_graph_frame = None
         self.graph_view = "semantic"
         self._closed = False
@@ -268,19 +271,29 @@ class PriorityMapRunner:
         if self.graph_agent is not None:
             self.graph_agent.poll_finished()
 
+        frame_t0 = time.perf_counter()
         frame = self.get_next_frame()
         if frame is None:
+            total_seconds = time.perf_counter() - frame_t0
             return PriorityFrameResult(
                 image_name=None,
                 image_path=None,
                 frame_index=None,
                 heatmap_only=None,
                 output_frame=None,
+                latency_seconds={
+                    "total": total_seconds,
+                    "vlm": 0.0,
+                    "sam3": 0.0,
+                    "other": total_seconds,
+                },
                 keep_running=False,
             )
 
         image = frame["image"]
         out = image
+        vlm_seconds = 0.0
+        sam3_seconds = 0.0
 
         # Position/geolocation is disabled for now so a plain folder of images just works.
         # position = (
@@ -291,11 +304,15 @@ class PriorityMapRunner:
 
         scene_dict = None
         if self.should_run_sam(frame):
+            vlm_t0 = time.perf_counter()
             scene_dict = self.scene_understanding.get_labels(image, self.task_description)
+            vlm_seconds = time.perf_counter() - vlm_t0
         # print(scene_dict)
 
         # Get Segmentations From Image
-        segmentations = self.segmentation.get_segmentations(image, scene_dict)
+        segmentation_result = self.segmentation.get_segmentations(image, scene_dict)
+        segmentations = segmentation_result.segmentations
+        sam3_seconds = segmentation_result.sam3_seconds
         if segmentations is None:
             segmentations = []
 
@@ -392,12 +409,19 @@ class PriorityMapRunner:
         )
         self._handle_graph_view_key()
         self.frames_processed += 1
+        total_seconds = time.perf_counter() - frame_t0
         return PriorityFrameResult(
             image_name=str(self.image_name),
             image_path=frame["image_path"],
             frame_index=frame["frame_index"],
             heatmap_only=heatmap_only,
             output_frame=out,
+            latency_seconds={
+                "total": total_seconds,
+                "vlm": vlm_seconds,
+                "sam3": sam3_seconds,
+                "other": max(total_seconds - vlm_seconds - sam3_seconds, 0.0),
+            },
             keep_running=keep_running,
         )
 
@@ -416,7 +440,8 @@ class PriorityMapRunner:
         graph_frame = self.graph_builder.render_2d_graph_frame(view=self.graph_view)
         if graph_frame is not None:
             self.last_graph_frame = graph_frame
-        print(f"Graph view: {self.graph_view}")
+        if self.debug:
+            print(f"Graph view: {self.graph_view}")
 
     def result(self):
         return PriorityMapResult(

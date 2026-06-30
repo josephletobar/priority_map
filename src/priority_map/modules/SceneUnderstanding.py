@@ -9,13 +9,17 @@ from openai import OpenAI
 from priority_map.config.prompts import GPT_VISION_PROMPT
 
 class SceneUnderstanding:
-    def __init__(self):
+    def __init__(self, debug=False):
         self.client = OpenAI()
+        self.debug = debug
         self.vocabulary = {}
         self.vocabulary_alpha = 0.90
         self.scene_history = deque(maxlen=3)
         self.current_scene_dict = {}
 
+    def _debug_print(self, *args, **kwargs):
+        if self.debug:
+            print(*args, **kwargs)
 
     def _update_vocabulary(self, scene_dict):
         # Update vocabulary with EMA'd scores and return scene_dict with smoothed scores
@@ -75,8 +79,8 @@ class SceneUnderstanding:
             try:
                 obj = parse_json(text[start:end + 1])
             except json.JSONDecodeError:
-                print("INVALID VLM JSON:")
-                print(text)
+                self._debug_print("INVALID VLM JSON:")
+                self._debug_print(text)
                 raise
 
         if isinstance(obj, list):
@@ -160,10 +164,10 @@ class SceneUnderstanding:
             }],
         )
         end = time.perf_counter()
-        print(f"\nGPT Vision inference time: {end - start:.2f} seconds")
+        self._debug_print(f"\nGPT Vision inference time: {end - start:.2f} seconds")
 
         text = response.output_text
-        print(text)
+        self._debug_print(text)
 
         scene_dict = self._normalize_scene_dict(self._loads_json_object(text))
 
