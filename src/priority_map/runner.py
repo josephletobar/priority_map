@@ -33,7 +33,7 @@ load_dotenv()
 
 # DEFAULT_IMAGE_FOLDER = Path(r"D:\UAV_VisLoc_dataset\05\drone")
 # DEFAULT_IMAGE_FOLDER = Path(r"D:\Train\Train\query_images")
-DEFAULT_IMAGE_FOLDER = Path(r"C:\Users\jletobar3\Projects\dronevid2")
+DEFAULT_IMAGE_FOLDER = Path(r"D:\dronevid2")
 
 
 def default_output_dir() -> Path:
@@ -137,7 +137,7 @@ class PriorityMapRunner:
         self.heat_panoramic_builder = PanoramaBuilder(alpha=0.9)
         self.panoramic_builder = PanoramaBuilder(alpha=0.15)
         self.last_graph_frame = None
-        self.graph_view = "semantic"
+        self.graph_view = "base"
         self._closed = False
 
     def _load_dataset_index(self):

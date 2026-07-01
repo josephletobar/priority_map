@@ -19,7 +19,7 @@ class GraphBuilder:
     SEMANTIC_K_NEAREST = 2
     SEMANTIC_SCORE_WEIGHT_GAMMA = 2.0
 
-    def __init__(self, output_dir, graph_view="semantic", debug=False):
+    def __init__(self, output_dir, graph_view="base", debug=False):
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.db_path = self.output_dir / "graph.db"

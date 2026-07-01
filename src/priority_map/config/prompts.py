@@ -24,6 +24,9 @@ For each visible category, output:
   Score categories based on how useful they are for accomplishing the mission objective.
   Prioritize practical likelihood over theoretical possibility.
   The score represents relevance to the mission objective, not visual confidence.
+  For example, a car is unlikely to be found in a dense forest, so a "forest" gets low priority for a car search, even if the forest is clearly visible.
+
+Always inject the goal object itself, even if unseen in this frame.  
 
 Scoring guide:
 - 0 = not relevant

@@ -4,6 +4,8 @@ import re
 import numpy as np
 from sklearn.cluster import DBSCAN
 
+from priority_map.config import params as config
+
 
 @dataclass
 class ClusteredSegmentation:
@@ -15,7 +17,7 @@ class ClusteredSegmentation:
     geo_pos: tuple[float, float]  # global position (centroid + accumulated transform)
     color: tuple[int, int, int] | None = None  # color for visualization (optional)
 
-def cluster_segmentations(segmentations, distance_threshold=150):
+def cluster_segmentations(segmentations, distance_threshold=config.SEGMENTATION_CLUSTER_DISTANCE_THRESHOLD):
     """Cluster segmentations by label and spatial proximity.
 
     Args:

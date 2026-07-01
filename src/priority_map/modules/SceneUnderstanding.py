@@ -2,15 +2,26 @@ import cv2
 import numpy as np
 import base64
 import json
+import os
 import re
 import time
 from collections import deque
+from dotenv import load_dotenv
 from openai import OpenAI
 from priority_map.config.prompts import GPT_VISION_PROMPT
 
+
+OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+SCENE_UNDERSTANDING_MODEL = "google/gemma-4-26b-a4b-it"
+
+
 class SceneUnderstanding:
     def __init__(self, debug=False):
-        self.client = OpenAI()
+        load_dotenv()
+        self.client = OpenAI(
+            api_key=os.getenv("OPENROUTER_API_KEY"),
+            base_url=OPENROUTER_BASE_URL,
+        )
         self.debug = debug
         self.vocabulary = {}
         self.vocabulary_alpha = 0.90
@@ -150,7 +161,7 @@ class SceneUnderstanding:
 
         start = time.perf_counter()
         response = self.client.responses.create(
-            model="gpt-5.4",
+            model=SCENE_UNDERSTANDING_MODEL,
             input=[{
                 "role": "user",
                 "content": [
@@ -164,7 +175,7 @@ class SceneUnderstanding:
             }],
         )
         end = time.perf_counter()
-        self._debug_print(f"\nGPT Vision inference time: {end - start:.2f} seconds")
+        self._debug_print(f"\nVLM inference time: {end - start:.2f} seconds")
 
         text = response.output_text
         self._debug_print(text)
