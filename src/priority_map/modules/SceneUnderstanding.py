@@ -12,7 +12,7 @@ from priority_map.config.prompts import GPT_VISION_PROMPT
 
 
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
-SCENE_UNDERSTANDING_MODEL = "google/gemma-4-26b-a4b-it"
+SCENE_UNDERSTANDING_MODEL = "google/gemma-4-31b-it"
 
 
 class SceneUnderstanding:
@@ -25,7 +25,7 @@ class SceneUnderstanding:
         self.debug = debug
         self.vocabulary = {}
         self.vocabulary_alpha = 0.90
-        self.scene_history = deque(maxlen=3)
+        self.scene_history = deque(maxlen=1)
         self.current_scene_dict = {}
 
     def _debug_print(self, *args, **kwargs):
@@ -45,7 +45,7 @@ class SceneUnderstanding:
                 self.vocabulary[label] = score
 
             updated_dict[label] = {
-                "prompt": label_info.get("prompt", []),
+                "reasoning": label_info["reasoning"],
                 "score": self.vocabulary[label]
             }
 
@@ -111,34 +111,20 @@ class SceneUnderstanding:
             raise ValueError(f"Expected scene dictionary, got {type(scene_dict).__name__}")
 
         for key, label_info in scene_dict.items():
-            if not isinstance(label_info, dict) or "score" not in label_info:
-                continue
+            if not isinstance(label_info, dict):
+                raise ValueError(f"Expected label info object for {key!r}")
+            if "reasoning" not in label_info or "score" not in label_info:
+                raise ValueError(f"Scene label {key!r} must include reasoning and score")
 
+            label = str(key).strip()
+            reasoning = str(label_info["reasoning"]).strip()
             score = float(label_info["score"])
 
-            if "prompt" in label_info:
-                label = str(key).strip()
-                prompts = label_info["prompt"]
-            elif "label" in label_info:
-                label = str(label_info["label"]).strip()
-                prompts = key
-            else:
-                continue
-
-            if isinstance(prompts, str):
-                prompts = [prompts]
-
-            prompts = [
-                str(prompt).strip()
-                for prompt in prompts
-                if str(prompt).strip()
-            ]
-
-            if not label or not prompts:
-                continue
+            if not label or not reasoning:
+                raise ValueError(f"Scene label {key!r} must have a non-empty label and reasoning")
 
             normalized[label] = {
-                "prompt": prompts,
+                "reasoning": reasoning,
                 "score": score,
             }
 
@@ -188,7 +174,12 @@ class SceneUnderstanding:
 
         # return debug()
 
-        scene_dict = self._vlm_inference(image, task)
+        try:
+            scene_dict = self._vlm_inference(image, task)
+        except (json.JSONDecodeError, ValueError, KeyError, TypeError) as exc:
+            self._debug_print(f"Skipping VLM scene update: {exc}")
+            return None
+
         scene_dict = self._update_vocabulary(scene_dict)
         merged_dict = self._merge_scene_dicts(scene_dict)
         self.scene_history.append(scene_dict)
@@ -201,27 +192,27 @@ class SceneUnderstanding:
 def debug():
     return {
         "trees": {
-            "prompt": "trees",
+            "reasoning": "Chosen as a major scene category, but scored at zero because trees are not useful for the example car-search task compared with roads or vehicles.",
             "score": 0,
         },
 
         "field": {
-            "prompt": "field",
+            "reasoning": "Chosen because fields are broad searchable terrain, but scored low because they are weak context for cars relative to roads, buildings, and vehicles.",
             "score": 30,
         },
 
         "road": {
-            "prompt": "road",
+            "reasoning": "Chosen because roads are strong car-search context and likely access paths, so they receive a high relevance score.",
             "score": 90,
         },
 
         "building": {
-            "prompt": "structure, rooftops",
+            "reasoning": "Chosen because buildings indicate human activity and possible nearby parking or access, giving them moderate relevance for a car-search task.",
             "score": 55,
         },
 
         "vehicle": {
-            "prompt": "vehicle, car",
+            "reasoning": "Chosen because vehicles directly match the example car-search objective, so they receive the highest relevance score.",
             "score": 100,
         },
     }

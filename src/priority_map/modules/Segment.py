@@ -77,21 +77,12 @@ class Segment():
         self.preview_output.close()
 
     def _parse_dict(self, scene_dict):
-        prompts = []
-        prompt_to_label = {}
-
-        for label, label_info in scene_dict.items():
-            label_prompts = label_info.get("prompt", [])
-            if isinstance(label_prompts, str):
-                label_prompts = [label_prompts]
-
-            for prompt in label_prompts:
-                prompt = str(prompt).strip()
-                if not prompt:
-                    continue
-
-                prompts.append(prompt)
-                prompt_to_label[prompt] = label
+        prompts = [
+            str(label).strip()
+            for label in scene_dict.keys()
+            if str(label).strip()
+        ]
+        prompt_to_label = {prompt: prompt for prompt in prompts}
 
         return prompts, prompt_to_label
 

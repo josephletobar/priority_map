@@ -34,6 +34,7 @@ load_dotenv()
 # DEFAULT_IMAGE_FOLDER = Path(r"D:\UAV_VisLoc_dataset\05\drone")
 # DEFAULT_IMAGE_FOLDER = Path(r"D:\Train\Train\query_images")
 DEFAULT_IMAGE_FOLDER = Path(r"D:\dronevid2")
+# DEFAULT_IMAGE_FOLDER = Path(r"D:\rtereg") 
 
 
 def default_output_dir() -> Path:
