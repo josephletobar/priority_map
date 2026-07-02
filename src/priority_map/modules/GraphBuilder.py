@@ -691,6 +691,71 @@ class GraphBuilder:
         nodes, edges, _ = self._get_nodes_and_edges()
         return nodes, edges
 
+    def get_recent_graph_context(self, limit=10):
+        limit = max(0, int(limit))
+        if limit == 0:
+            return {"nodes": [], "edges": []}
+
+        self.cursor.execute(
+            '''
+            SELECT id
+            FROM nodes
+            ORDER BY rowid DESC
+            LIMIT ?
+            ''',
+            (limit,),
+        )
+        recent_ids = [row[0] for row in self.cursor.fetchall()]
+        if not recent_ids:
+            return {"nodes": [], "edges": []}
+
+        recent_placeholders = ','.join('?' for _ in recent_ids)
+        self.cursor.execute(
+            f'''
+            SELECT source_id, target_id, weight
+            FROM edges
+            WHERE source_id IN ({recent_placeholders})
+               OR target_id IN ({recent_placeholders})
+            ''',
+            tuple(recent_ids + recent_ids),
+        )
+        edge_rows = self.cursor.fetchall()
+
+        node_ids = set(recent_ids)
+        for source_id, target_id, _ in edge_rows:
+            node_ids.add(source_id)
+            node_ids.add(target_id)
+
+        node_placeholders = ','.join('?' for _ in node_ids)
+        self.cursor.execute(
+            f'''
+            SELECT id, label, score
+            FROM nodes
+            WHERE id IN ({node_placeholders})
+            ''',
+            tuple(node_ids),
+        )
+        node_rows = self.cursor.fetchall()
+
+        return {
+            "nodes": [
+                {
+                    "id": node_id,
+                    "label": label,
+                    "score": self._to_float(score),
+                }
+                for node_id, label, score in node_rows
+            ],
+            "edges": [
+                {
+                    "source_id": source_id,
+                    "target_id": target_id,
+                    "weight": self._to_float(weight),
+                }
+                for source_id, target_id, weight in edge_rows
+            ],
+        }
+
     def render_2d_graph_frame(self, view=None):
         nodes_data, edges, _ = self._get_nodes_and_edges(view)
 

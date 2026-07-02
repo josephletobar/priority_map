@@ -11,6 +11,14 @@ Reuse labels when appropriate and keep scores reasonably stable across similar f
 Do not reuse if the new observation is uniquely distinct.
 Do not make large score changes unless the scene meaningfully changes such that new evidence justifies it.
 
+Recent graph context from previous frames: {recent_graph_context}
+This contains recent map nodes and edges connected to those nodes. Use it as prior
+spatial and semantic context for continuity and score stability, but do not treat
+it as proof that anything is visible in the current image.
+When assigning current priority scores, reason about whether the recent graph
+context changes the likely broader environment, nearby category relationships,
+or mission relevance of the current scene labels.
+
 Always include the concrete target category from the mission objective with 100 percent relevance, even if it is not directly visible.
 Derive this label by removing mission/action wording and keeping only the localizable object or category being searched for.
 The target label must be a simple noun or noun phrase, not the full task wording, not a search phrase, and not a sentence.
@@ -27,12 +35,17 @@ For each visible category, output:
 - "reasoning": an interpretability explanation for why you chose this label.
   First consider spatial context: where this category appears in the scene, what
   surrounds it, whether it is isolated or embedded in other categories, and how
-  those spatial relationships change its mission relevance. Then explain why this
-  category belongs in the scene dictionary, how it relates to the mission objective,
-  and what makes it more or less useful than the other selected categories. This is
-  not a visual confidence explanation. Do not merely say the category is visible.
+  those spatial relationships change its mission relevance. Also consider the
+  recent graph context from previous frames: whether recent nearby labels and
+  edges suggest a broader environment or pattern that should raise, lower, or
+  stabilize this label's priority. Then explain why this category belongs in the
+  scene dictionary, how it relates to the mission objective, and what makes it
+  more or less useful than the other selected categories. This is not a visual
+  confidence explanation. Do not merely say the category is visible.
   Give balanced reasoning: include why the score is justified, and also why it is
   not substantially higher or lower.
+  Explicitly state how the recent graph context affected this score, or state that
+  it did not materially affect this score.
 
 - "score": relevance score from 0-100 for the mission objective.
 
@@ -67,6 +80,7 @@ Rules:
 - Score categories relative to each other
 - Prioritize probability over possibility
 - Use global spatial context when assigning scores, including adjacency, enclosure, isolation, clustering, and scene layout
+- Use recent graph context when it changes likely broader environment, continuity, or score stability
 - For each label, reason about spatial context and mission relevance first, then output the score after that reasoning
 - Each reasoning field must include both positive and limiting factors for the score unless the score is exactly 0 or 100
 

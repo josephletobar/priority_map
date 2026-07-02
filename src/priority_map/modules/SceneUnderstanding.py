@@ -130,7 +130,7 @@ class SceneUnderstanding:
 
         return normalized
     
-    def _vlm_inference(self, image, task):
+    def _vlm_inference(self, image, task, recent_graph_context=None):
         image = cv2.resize(
             image,
             (512, 512),
@@ -143,6 +143,10 @@ class SceneUnderstanding:
         prompt = GPT_VISION_PROMPT.format(
             task=task,
             vocabulary=json.dumps(self.vocabulary, indent=2),
+            recent_graph_context=json.dumps(
+                recent_graph_context or {"nodes": [], "edges": []},
+                indent=2,
+            ),
         )
 
         start = time.perf_counter()
@@ -170,12 +174,16 @@ class SceneUnderstanding:
 
         return scene_dict
 
-    def get_labels(self, image: np.ndarray, task: str):
+    def get_labels(self, image: np.ndarray, task: str, recent_graph_context=None):
 
         # return debug()
 
         try:
-            scene_dict = self._vlm_inference(image, task)
+            scene_dict = self._vlm_inference(
+                image,
+                task,
+                recent_graph_context=recent_graph_context,
+            )
         except (json.JSONDecodeError, ValueError, KeyError, TypeError) as exc:
             self._debug_print(f"Skipping VLM scene update: {exc}")
             return None

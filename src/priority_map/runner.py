@@ -306,7 +306,12 @@ class PriorityMapRunner:
         scene_dict = None
         if self.should_run_sam(frame):
             vlm_t0 = time.perf_counter()
-            scene_dict = self.scene_understanding.get_labels(image, self.task_description)
+            recent_graph_context = self.graph_builder.get_recent_graph_context(limit=10)
+            scene_dict = self.scene_understanding.get_labels(
+                image,
+                self.task_description,
+                recent_graph_context=recent_graph_context,
+            )
             vlm_seconds = time.perf_counter() - vlm_t0
         # print(scene_dict)
 
