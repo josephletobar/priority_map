@@ -1,33 +1,27 @@
 import sqlite3
 from io import BytesIO
+from pathlib import Path
+
 import cv2
-import numpy as np
 import matplotlib
+import networkx as nx
+import numpy as np
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-import networkx as nx
-from pathlib import Path
-from priority_map.scripts.cluster_segmentations import (
-    ClusteredSegmentation,
-    semantic_clustering_with_members,
-)
+
+from priority_map.scripts.cluster_segmentations import ClusteredSegmentation
 
 
 class GraphBuilder:
-    MATCH_DISTANCE_THRESHOLD = 200 # pixels
-    EDGE_THRESHOLD = 600 # pixels
-    SEMANTIC_K_NEAREST = 2
-    SEMANTIC_SCORE_WEIGHT_GAMMA = 2.0
+    MATCH_DISTANCE_THRESHOLD = 200  # pixels
+    EDGE_THRESHOLD = 600  # pixels
 
-    def __init__(self, output_dir, graph_view="base", debug=False):
+    def __init__(self, output_dir, debug=False):
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.db_path = self.output_dir / "graph.db"
-        self.graph_view = graph_view
         self.debug = debug
-
-        # print(f"GraphBuilder DB path: {self.db_path}")
-        # print(f"DB file exists before connect: {self.db_path.exists()}")
 
         self.conn = sqlite3.connect(str(self.db_path))
         self.cursor = self.conn.cursor()
@@ -48,6 +42,7 @@ class GraphBuilder:
                 color_g INTEGER,
                 color_r INTEGER,
                 mask_blob BLOB,
+                reasoning TEXT,
                 agent_reviewed INTEGER NOT NULL DEFAULT 0
             )
         ''')
@@ -59,9 +54,9 @@ class GraphBuilder:
                 'ALTER TABLE nodes ADD COLUMN agent_reviewed INTEGER NOT NULL DEFAULT 0'
             )
         if 'mask_blob' not in node_columns:
-            self.cursor.execute(
-                'ALTER TABLE nodes ADD COLUMN mask_blob BLOB'
-            )
+            self.cursor.execute('ALTER TABLE nodes ADD COLUMN mask_blob BLOB')
+        if 'reasoning' not in node_columns:
+            self.cursor.execute('ALTER TABLE nodes ADD COLUMN reasoning TEXT')
 
         self.cursor.execute('''
             CREATE TABLE IF NOT EXISTS edges (
@@ -75,54 +70,20 @@ class GraphBuilder:
         ''')
 
         self.cursor.execute('''
-            CREATE TABLE IF NOT EXISTS semantic_nodes (
-                id TEXT PRIMARY KEY,
-                label TEXT NOT NULL,
-                score REAL NOT NULL,
-                count INTEGER NOT NULL,
-                geo_pos_x REAL NOT NULL,
-                geo_pos_y REAL NOT NULL,
-                color_b INTEGER,
-                color_g INTEGER,
-                color_r INTEGER,
-                mask_blob BLOB,
-                agent_reviewed INTEGER NOT NULL DEFAULT 0
-            )
-        ''')
-
-        self.cursor.execute('PRAGMA table_info(semantic_nodes)')
-        semantic_node_columns = {row[1] for row in self.cursor.fetchall()}
-        if 'mask_blob' not in semantic_node_columns:
-            self.cursor.execute(
-                'ALTER TABLE semantic_nodes ADD COLUMN mask_blob BLOB'
-            )
-
-        self.cursor.execute('''
-            CREATE TABLE IF NOT EXISTS semantic_edges (
+            CREATE TABLE IF NOT EXISTS model_edges (
                 source_id TEXT NOT NULL,
                 target_id TEXT NOT NULL,
-                weight REAL NOT NULL,
-                PRIMARY KEY (source_id, target_id),
-                FOREIGN KEY (source_id) REFERENCES semantic_nodes(id),
-                FOREIGN KEY (target_id) REFERENCES semantic_nodes(id)
+                text TEXT NOT NULL,
+                created_by TEXT NOT NULL,
+                PRIMARY KEY (source_id, target_id, text),
+                FOREIGN KEY (source_id) REFERENCES nodes(id),
+                FOREIGN KEY (target_id) REFERENCES nodes(id)
             )
         ''')
 
-        self.cursor.execute('''
-            CREATE TABLE IF NOT EXISTS semantic_node_members (
-                semantic_node_id TEXT NOT NULL,
-                base_node_id TEXT NOT NULL,
-                PRIMARY KEY (semantic_node_id, base_node_id),
-                FOREIGN KEY (semantic_node_id) REFERENCES semantic_nodes(id),
-                FOREIGN KEY (base_node_id) REFERENCES nodes(id)
-            )
-        ''')
-
-        self.cursor.execute('DELETE FROM nodes')
+        self.cursor.execute('DELETE FROM model_edges')
         self.cursor.execute('DELETE FROM edges')
-        self.cursor.execute('DELETE FROM semantic_nodes')
-        self.cursor.execute('DELETE FROM semantic_edges')
-        self.cursor.execute('DELETE FROM semantic_node_members')
+        self.cursor.execute('DELETE FROM nodes')
         self.conn.commit()
 
     def _encode_mask(self, mask):
@@ -148,10 +109,6 @@ class GraphBuilder:
         color = cv2.applyColorMap(heat_value, cv2.COLORMAP_JET)[0, 0]
         return tuple(int(channel) for channel in color)
 
-    def _semantic_score_weight(self, score):
-        x = np.clip(self._to_float(score), 0.0, 100.0) / 100.0
-        return x ** self.SEMANTIC_SCORE_WEIGHT_GAMMA
-
     def _to_float(self, value, default=0.0):
         if value is None:
             return default
@@ -171,76 +128,106 @@ class GraphBuilder:
         except (TypeError, ValueError):
             return default
 
-    def _get_node_pos(self, node_id):
-        self.cursor.execute('SELECT geo_pos_x, geo_pos_y FROM nodes WHERE id = ?', (node_id,))
-        row = self.cursor.fetchone()
-        if row:
-            return row[0], row[1]
-        return None, None
-
     def _next_node_id(self, base_label):
-        """Get next unique node_id for label by querying max from DB"""
-        self.cursor.execute('''
+        self.cursor.execute(
+            '''
             SELECT MAX(CAST(SUBSTR(id, LENGTH(?) + 2) AS INTEGER))
             FROM nodes WHERE id LIKE ?
-        ''', (base_label, f'{base_label}_%'))
+            ''',
+            (base_label, f'{base_label}_%'),
+        )
         row = self.cursor.fetchone()
         max_idx = row[0] if row[0] is not None else -1
-        node_id = f"{base_label}_{max_idx + 1}"
-        # print(f"_next_node_id({base_label}): max_idx={max_idx}, returning {node_id}")
-        return node_id
-
-    def _next_semantic_node_id(self):
-        self.cursor.execute('''
-            SELECT MAX(CAST(SUBSTR(id, LENGTH(?) + 2) AS INTEGER))
-            FROM semantic_nodes WHERE id LIKE ?
-        ''', ('semantic', 'semantic_%'))
-        row = self.cursor.fetchone()
-        max_idx = row[0] if row[0] is not None else -1
-        return f"semantic_{max_idx + 1}"
+        return f"{base_label}_{max_idx + 1}"
 
     def _find_matching_node(self, base_label, x, y):
-        """Find existing node with same base_label within MATCH_DISTANCE_THRESHOLD"""
-        self.cursor.execute('SELECT id, geo_pos_x, geo_pos_y FROM nodes WHERE label LIKE ?', (f'{base_label}%',))
+        self.cursor.execute(
+            'SELECT id, geo_pos_x, geo_pos_y FROM nodes WHERE label LIKE ?',
+            (f'{base_label}%',),
+        )
         for node_id, node_x, node_y in self.cursor.fetchall():
             distance = float(np.linalg.norm(np.array([x, y]) - np.array([node_x, node_y])))
             if distance <= self.MATCH_DISTANCE_THRESHOLD:
                 return node_id
         return None
 
+    def _node_exists(self, node_id):
+        self.cursor.execute('SELECT 1 FROM nodes WHERE id = ?', (node_id,))
+        return self.cursor.fetchone() is not None
+
+    def _append_node_reasoning(self, node_id, reasoning):
+        reasoning = str(reasoning or "").strip()
+        if not reasoning:
+            return
+
+        self.cursor.execute('SELECT reasoning FROM nodes WHERE id = ?', (node_id,))
+        row = self.cursor.fetchone()
+        if not row:
+            return
+
+        existing = str(row[0] or "").strip()
+        if not existing:
+            updated = reasoning
+        else:
+            parts = [part.strip() for part in existing.split("\n") if part.strip()]
+            if reasoning in parts:
+                return
+            updated = "\n".join(parts + [reasoning])
+
+        self.cursor.execute(
+            'UPDATE nodes SET reasoning = ? WHERE id = ?',
+            (updated, node_id),
+        )
+
     def add_nodes(self, clustered_segmentations):
-        """Add ClusteredSegmentations as nodes and create edges within 200px distance"""
-        # print(f"add_nodes called with {len(clustered_segmentations)} segmentations")
-        # for seg in clustered_segmentations:
-        #     print(f"  {seg.label} at ({seg.geo_pos[0]:.1f}, {seg.geo_pos[1]:.1f})")
-
         new_node_ids = []
-        
+        result = {
+            "label_to_node_ids": {},
+            "cluster_to_node_id": {},
+        }
 
-        for seg in clustered_segmentations:
+        for index, seg in enumerate(clustered_segmentations):
             base_label = seg.label
             x, y = seg.geo_pos
 
             match = self._find_matching_node(base_label, x, y)
             if match:
+                self._append_node_reasoning(match, getattr(seg, "reasoning", ""))
+                result["label_to_node_ids"].setdefault(base_label, []).append(match)
+                result["cluster_to_node_id"][index] = match
                 continue
 
             node_id = self._next_node_id(base_label)
-
-            color = getattr(seg, 'color', None) or (0, 0, 0)
+            color = getattr(seg, 'color', None) or self._score_to_jet_color(seg.score)
             mask_blob = self._encode_mask(seg.mask)
-            self.cursor.execute('''
-                INSERT OR REPLACE INTO nodes
-                (id, label, score, count, geo_pos_x, geo_pos_y, color_b, color_g, color_r, mask_blob, agent_reviewed)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
-            ''', (node_id, seg.label, self._to_float(seg.score), int(seg.count), float(x), float(y),
-                  int(color[0]), int(color[1]), int(color[2]), mask_blob))
+            reasoning = str(getattr(seg, "reasoning", "") or "").strip()
 
+            self.cursor.execute(
+                '''
+                INSERT OR REPLACE INTO nodes
+                (id, label, score, count, geo_pos_x, geo_pos_y, color_b, color_g, color_r, mask_blob, reasoning, agent_reviewed)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+                ''',
+                (
+                    node_id,
+                    seg.label,
+                    self._to_float(seg.score),
+                    int(seg.count),
+                    float(x),
+                    float(y),
+                    int(color[0]),
+                    int(color[1]),
+                    int(color[2]),
+                    mask_blob,
+                    reasoning,
+                ),
+            )
             new_node_ids.append((node_id, x, y))
+            result["label_to_node_ids"].setdefault(base_label, []).append(node_id)
+            result["cluster_to_node_id"][index] = node_id
 
         self.conn.commit()
 
-        threshold = self.EDGE_THRESHOLD 
         for node_id, x, y in new_node_ids:
             self.cursor.execute('SELECT id, geo_pos_x, geo_pos_y FROM nodes')
             for row_id, row_x, row_y in self.cursor.fetchall():
@@ -248,16 +235,18 @@ class GraphBuilder:
                     continue
 
                 distance = float(np.linalg.norm(np.array([x, y]) - np.array([row_x, row_y])))
-                if distance <= threshold:
+                if distance <= self.EDGE_THRESHOLD:
                     src, dst = sorted([node_id, row_id])
-                    self.cursor.execute('''
+                    self.cursor.execute(
+                        '''
                         INSERT OR REPLACE INTO edges (source_id, target_id, weight)
                         VALUES (?, ?, ?)
-                    ''', (src, dst, distance))
+                        ''',
+                        (src, dst, distance),
+                    )
 
         self.conn.commit()
-        if new_node_ids:
-            self.update_semantic_nodes([node_id for node_id, _, _ in new_node_ids])
+        return result
 
     def _base_rows_to_clustered(self, node_ids):
         if not node_ids:
@@ -266,7 +255,7 @@ class GraphBuilder:
         placeholders = ','.join('?' for _ in node_ids)
         self.cursor.execute(
             f'''
-            SELECT id, label, score, count, geo_pos_x, geo_pos_y, color_b, color_g, color_r, mask_blob
+            SELECT id, label, score, count, geo_pos_x, geo_pos_y, color_b, color_g, color_r, mask_blob, reasoning
             FROM nodes WHERE id IN ({placeholders})
             ''',
             tuple(node_ids),
@@ -274,7 +263,7 @@ class GraphBuilder:
 
         clustered = []
         for row in self.cursor.fetchall():
-            node_id, label, score, count, x, y, color_b, color_g, color_r, mask_blob = row
+            node_id, label, score, count, x, y, color_b, color_g, color_r, mask_blob, reasoning = row
             cluster = ClusteredSegmentation(
                 label=label,
                 centroid=(int(round(x)), int(round(y))),
@@ -282,6 +271,7 @@ class GraphBuilder:
                 count=count,
                 mask=self._decode_mask(mask_blob),
                 geo_pos=(x, y),
+                reasoning=reasoning or "",
                 color=(color_b, color_g, color_r),
             )
             cluster.base_node_id = node_id
@@ -289,374 +279,66 @@ class GraphBuilder:
 
         return clustered
 
-    def _semantic_rows_to_clustered(self, semantic_node_ids):
-        if not semantic_node_ids:
-            return []
-
-        placeholders = ','.join('?' for _ in semantic_node_ids)
-        self.cursor.execute(
-            f'''
-            SELECT id, label, score, count, geo_pos_x, geo_pos_y, color_b, color_g, color_r, mask_blob
-            FROM semantic_nodes WHERE id IN ({placeholders})
-            ''',
-            tuple(semantic_node_ids),
-        )
-
-        clustered = []
-        for row in self.cursor.fetchall():
-            node_id, label, score, count, x, y, color_b, color_g, color_r, mask_blob = row
-            cluster = ClusteredSegmentation(
-                label=label,
-                centroid=(int(round(x)), int(round(y))),
-                score=self._to_float(score),
-                count=count,
-                mask=self._decode_mask(mask_blob),
-                geo_pos=(x, y),
-                color=(color_b, color_g, color_r),
-            )
-            cluster.semantic_node_id = node_id
-            clustered.append(cluster)
-
-        return clustered
-
-    def _nearest_semantic_node_ids(self, base_node_ids, k=None):
-        if not base_node_ids:
-            return set()
-
-        k = k or self.SEMANTIC_K_NEAREST
-        placeholders = ','.join('?' for _ in base_node_ids)
-        self.cursor.execute(
-            f'SELECT id, geo_pos_x, geo_pos_y FROM nodes WHERE id IN ({placeholders})',
-            tuple(base_node_ids),
-        )
-        base_rows = self.cursor.fetchall()
-        if not base_rows:
-            return set()
-
-        self.cursor.execute('SELECT id, geo_pos_x, geo_pos_y FROM semantic_nodes')
-        semantic_rows = self.cursor.fetchall()
-        if not semantic_rows:
-            return set()
-
-        nearest_ids = set()
-        for _, base_x, base_y in base_rows:
-            distances = []
-            for semantic_id, semantic_x, semantic_y in semantic_rows:
-                distance = float(np.linalg.norm(
-                    np.array([base_x, base_y]) - np.array([semantic_x, semantic_y])
-                ))
-                distances.append((distance, semantic_id))
-
-            nearest_ids.update(
-                semantic_id
-                for _, semantic_id in sorted(distances, key=lambda item: item[0])[:k]
-            )
-
-        return nearest_ids
-
-    def _insert_semantic_node(self, semantic_cluster, semantic_node_id=None):
-        semantic_node_id = semantic_node_id or self._next_semantic_node_id()
-        mask_blob = self._encode_mask(semantic_cluster.mask)
-        x, y = semantic_cluster.geo_pos
-
-        self.cursor.execute('''
-            INSERT INTO semantic_nodes
-            (id, label, score, count, geo_pos_x, geo_pos_y, color_b, color_g, color_r, mask_blob, agent_reviewed)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
-        ''', (
-            semantic_node_id,
-            semantic_cluster.label,
-            0.0,
-            int(semantic_cluster.count),
-            float(x),
-            float(y),
-            0,
-            0,
-            0,
-            mask_blob,
-        ))
-
-        return semantic_node_id
-
-    def _update_semantic_node(self, semantic_node_id, semantic_cluster, score=None):
-        score = self._to_float(semantic_cluster.score if score is None else score)
-        color = self._score_to_jet_color(score)
-        mask_blob = self._encode_mask(semantic_cluster.mask)
-        x, y = semantic_cluster.geo_pos
-
-        self.cursor.execute('''
-            UPDATE semantic_nodes
-            SET label = ?,
-                score = ?,
-                count = ?,
-                geo_pos_x = ?,
-                geo_pos_y = ?,
-                color_b = ?,
-                color_g = ?,
-                color_r = ?,
-                mask_blob = ?,
-                agent_reviewed = 0
-            WHERE id = ?
-        ''', (
-            semantic_cluster.label,
-            score,
-            int(semantic_cluster.count),
-            float(x),
-            float(y),
-            int(color[0]),
-            int(color[1]),
-            int(color[2]),
-            mask_blob,
-            semantic_node_id,
-        ))
-
-    def _semantic_counts(self, semantic_node_ids):
-        if not semantic_node_ids:
-            return {}
-
-        placeholders = ','.join('?' for _ in semantic_node_ids)
-        self.cursor.execute(
-            f'SELECT id, count FROM semantic_nodes WHERE id IN ({placeholders})',
-            tuple(semantic_node_ids),
-        )
-        return {row[0]: row[1] for row in self.cursor.fetchall()}
-
-    def _choose_semantic_survivor(self, semantic_node_ids):
-        counts = self._semantic_counts(semantic_node_ids)
-        return sorted(
-            semantic_node_ids,
-            key=lambda node_id: (-counts.get(node_id, 0), node_id),
-        )[0]
-
-    def _merge_semantic_memberships(self, survivor_id, merged_semantic_ids):
-        for semantic_node_id in merged_semantic_ids:
-            if semantic_node_id == survivor_id:
-                continue
-
-            self.cursor.execute(
-                'SELECT base_node_id FROM semantic_node_members WHERE semantic_node_id = ?',
-                (semantic_node_id,),
-            )
-            member_ids = [row[0] for row in self.cursor.fetchall()]
-            self.cursor.executemany(
-                '''
-                INSERT OR IGNORE INTO semantic_node_members
-                (semantic_node_id, base_node_id) VALUES (?, ?)
-                ''',
-                [(survivor_id, member_id) for member_id in member_ids],
-            )
-            self.cursor.execute(
-                'DELETE FROM semantic_node_members WHERE semantic_node_id = ?',
-                (semantic_node_id,),
-            )
-            self.cursor.execute(
-                'DELETE FROM semantic_nodes WHERE id = ?',
-                (semantic_node_id,),
-            )
-
-    def _assign_base_memberships(self, semantic_node_id, base_node_ids):
-        if not base_node_ids:
-            return
-
-        placeholders = ','.join('?' for _ in base_node_ids)
-        self.cursor.execute(
-            f'DELETE FROM semantic_node_members WHERE base_node_id IN ({placeholders})',
-            tuple(base_node_ids),
-        )
-
-        self.cursor.executemany(
-            '''
-            INSERT OR IGNORE INTO semantic_node_members
-            (semantic_node_id, base_node_id) VALUES (?, ?)
-            ''',
-            [(semantic_node_id, base_node_id) for base_node_id in base_node_ids],
-        )
-
-    def _semantic_cluster_from_base_members(self, base_clusters, label=None):
-        avg_centroid = tuple(np.mean([cluster.centroid for cluster in base_clusters], axis=0).astype(int))
-        valid_geo_positions = [cluster.geo_pos for cluster in base_clusters if cluster.geo_pos is not None]
-        avg_geo_pos = (
-            tuple(np.mean(valid_geo_positions, axis=0))
-            if valid_geo_positions
-            else avg_centroid
-        )
-
-        merged_mask = np.logical_or.reduce([cluster.mask for cluster in base_clusters]).astype(np.uint8)
-        representative = max(base_clusters, key=lambda cluster: cluster.score)
-
-        return ClusteredSegmentation(
-            label=label or representative.label,
-            centroid=avg_centroid,
-            score=0,
-            count=sum(cluster.count for cluster in base_clusters),
-            mask=merged_mask,
-            geo_pos=avg_geo_pos,
-            color=None,
-        )
-
-    def _recompute_semantic_node_from_members(self, semantic_node_id, label=None):
-        self.cursor.execute(
-            'SELECT base_node_id FROM semantic_node_members WHERE semantic_node_id = ?',
-            (semantic_node_id,),
-        )
-        base_node_ids = [row[0] for row in self.cursor.fetchall()]
-        if not base_node_ids:
-            return
-
-        base_clusters = self._base_rows_to_clustered(base_node_ids)
-        if not base_clusters:
-            return
-
-        weighted_score_sum = 0.0
-        total_weight = 0.0
-        for cluster in base_clusters:
-            score_value = self._to_float(cluster.score)
-            weight = self._semantic_score_weight(score_value)
-            weighted_score_sum += score_value * weight
-            total_weight += weight
-
-        score = (
-            weighted_score_sum / total_weight
-            if total_weight > 0
-            else float(np.mean([cluster.score for cluster in base_clusters]))
-        )
-        semantic_cluster = self._semantic_cluster_from_base_members(base_clusters, label=label)
-        self._update_semantic_node(semantic_node_id, semantic_cluster, score=score)
-
-    def _rebuild_semantic_edges(self):
-        self.cursor.execute('DELETE FROM semantic_edges')
-        self.cursor.execute('SELECT base_node_id, semantic_node_id FROM semantic_node_members')
-        base_to_semantic = {row[0]: row[1] for row in self.cursor.fetchall()}
-
-        self.cursor.execute('SELECT source_id, target_id, weight FROM edges')
-        edge_weights = {}
-        for source_id, target_id, weight in self.cursor.fetchall():
-            semantic_source = base_to_semantic.get(source_id)
-            semantic_target = base_to_semantic.get(target_id)
-            if not semantic_source or not semantic_target or semantic_source == semantic_target:
-                continue
-
-            src, dst = sorted([semantic_source, semantic_target])
-            key = (src, dst)
-            if key not in edge_weights or weight < edge_weights[key]:
-                edge_weights[key] = weight
-
-        self.cursor.executemany(
-            '''
-            INSERT OR REPLACE INTO semantic_edges (source_id, target_id, weight)
-            VALUES (?, ?, ?)
-            ''',
-            [(src, dst, weight) for (src, dst), weight in edge_weights.items()],
-        )
-
-    def update_semantic_nodes(self, new_node_ids):
-        if not new_node_ids:
-            return
-
-        new_node_ids = list(dict.fromkeys(new_node_ids))
-        nearest_semantic_ids = self._nearest_semantic_node_ids(new_node_ids)
-        candidate_clusters = (
-            self._base_rows_to_clustered(new_node_ids)
-            + self._semantic_rows_to_clustered(nearest_semantic_ids)
-        )
-        if not candidate_clusters:
-            return
-
-        semantic_groups = semantic_clustering_with_members(
-            candidate_clusters,
-            debug=self.debug,
-        )
-        for semantic_cluster, member_clusters in semantic_groups:
-            base_node_ids = {
-                member.base_node_id
-                for member in member_clusters
-                if hasattr(member, 'base_node_id')
-            }
-            semantic_node_ids = {
-                member.semantic_node_id
-                for member in member_clusters
-                if hasattr(member, 'semantic_node_id')
-            }
-
-            if not base_node_ids and len(semantic_node_ids) <= 1:
-                continue
-
-            if semantic_node_ids:
-                target_semantic_id = self._choose_semantic_survivor(semantic_node_ids)
-                self._merge_semantic_memberships(target_semantic_id, semantic_node_ids)
-            else:
-                target_semantic_id = self._insert_semantic_node(semantic_cluster)
-
-            self._assign_base_memberships(target_semantic_id, base_node_ids)
-            self._recompute_semantic_node_from_members(
-                target_semantic_id,
-                label=semantic_cluster.label,
-            )
-
-        self._rebuild_semantic_edges()
-        self.conn.commit()
-
-    def _view_tables(self, view=None):
-        view = view or self.graph_view
-        if view == "semantic":
-            self.cursor.execute('SELECT COUNT(*) FROM semantic_nodes')
-            if self.cursor.fetchone()[0] > 0:
-                return "semantic_nodes", "semantic_edges", "semantic"
-        return "nodes", "edges", "base"
-
     def _get_nodes_and_edges(self, view=None):
-        """Query nodes and edges for a graph view."""
-        node_table, edge_table, resolved_view = self._view_tables(view)
-        self.cursor.execute(f'''
-            SELECT id, label, geo_pos_x, geo_pos_y, score, color_b, color_g, color_r
-            FROM {node_table}
+        self.cursor.execute('''
+            SELECT id, label, geo_pos_x, geo_pos_y, score, color_b, color_g, color_r, reasoning
+            FROM nodes
         ''')
-        nodes = {
-            row[0]: {
+        nodes = {}
+        for row in self.cursor.fetchall():
+            nodes[row[0]] = {
                 'label': row[1],
                 'pos': (row[2], row[3]),
                 'score': self._to_float(row[4]),
-                'color': (row[5], row[6], row[7]),
+                'color': (
+                    int(row[5] or 0),
+                    int(row[6] or 0),
+                    int(row[7] or 0),
+                ),
+                'reasoning': row[8] or "",
             }
-            for row in self.cursor.fetchall()
-        }
 
-        self.cursor.execute(f'SELECT source_id, target_id, weight FROM {edge_table}')
+        self.cursor.execute('SELECT source_id, target_id, weight FROM edges')
         edges = [(row[0], row[1], row[2]) for row in self.cursor.fetchall()]
 
-        return nodes, edges, resolved_view
+        return nodes, edges, "base"
+
+    def _get_model_edges(self):
+        self.cursor.execute('SELECT source_id, target_id, text FROM model_edges')
+        return [
+            (source_id, target_id, text)
+            for source_id, target_id, text in self.cursor.fetchall()
+        ]
 
     def get_agent_graph_data(self, view=None):
-        node_table, edge_table, resolved_view = self._view_tables(view)
-        self.cursor.execute(f'SELECT id, score, agent_reviewed FROM {node_table}')
+        self.cursor.execute('SELECT id, label, score, reasoning, agent_reviewed FROM nodes')
         rows = [
-            (node_id, self._to_float(score), agent_reviewed)
-            for node_id, score, agent_reviewed in self.cursor.fetchall()
+            (node_id, label, self._to_float(score), reasoning or "", agent_reviewed)
+            for node_id, label, score, reasoning, agent_reviewed in self.cursor.fetchall()
         ]
-        self.cursor.execute(f'SELECT source_id, target_id, weight FROM {edge_table}')
-        edges = self.cursor.fetchall()
-        return rows, edges, resolved_view
+        self.cursor.execute('SELECT source_id, target_id, weight FROM edges')
+        spatial_edges = self.cursor.fetchall()
+        self.cursor.execute('SELECT source_id, target_id, text, created_by FROM model_edges')
+        model_edges = self.cursor.fetchall()
+        return rows, spatial_edges, model_edges, "base"
 
     def count_unreviewed_nodes(self, view=None):
-        node_table, _, _ = self._view_tables(view)
-        self.cursor.execute(f'SELECT COUNT(*) FROM {node_table} WHERE agent_reviewed = 0')
+        self.cursor.execute('SELECT COUNT(*) FROM nodes WHERE agent_reviewed = 0')
         return self.cursor.fetchone()[0]
 
     def mark_agent_reviewed(self, node_ids, view=None):
         if not node_ids:
             return
 
-        node_table, _, _ = self._view_tables(view)
         self.cursor.executemany(
-            f'UPDATE {node_table} SET agent_reviewed = 1 WHERE id = ?',
+            'UPDATE nodes SET agent_reviewed = 1 WHERE id = ?',
             [(node_id,) for node_id in node_ids],
         )
         self.conn.commit()
 
     def apply_score_delta(self, node_id, delta, view=None):
-        node_table, _, _ = self._view_tables(view)
         self.cursor.execute(
-            f'SELECT score, color_b, color_g, color_r FROM {node_table} WHERE id = ?',
+            'SELECT score, color_b, color_g, color_r FROM nodes WHERE id = ?',
             (node_id,),
         )
         row = self.cursor.fetchone()
@@ -672,13 +354,13 @@ class GraphBuilder:
 
         new_score = max(0, min(100, old_score + delta))
         score_ratio = new_score / old_score if old_score > 0 else 1.0
-        new_b = max(0, min(255, int(old_b * score_ratio)))
-        new_g = max(0, min(255, int(old_g * score_ratio)))
-        new_r = max(0, min(255, int(old_r * score_ratio)))
+        new_b = max(0, min(255, int((old_b or 0) * score_ratio)))
+        new_g = max(0, min(255, int((old_g or 0) * score_ratio)))
+        new_r = max(0, min(255, int((old_r or 0) * score_ratio)))
 
         self.cursor.execute(
-            f'''
-            UPDATE {node_table}
+            '''
+            UPDATE nodes
             SET score = ?, color_b = ?, color_g = ?, color_r = ?
             WHERE id = ?
             ''',
@@ -690,6 +372,80 @@ class GraphBuilder:
     def _get_all_nodes_and_edges(self):
         nodes, edges, _ = self._get_nodes_and_edges()
         return nodes, edges
+
+    def insert_model_edges(self, edge_specs, created_by):
+        if not edge_specs:
+            return []
+
+        inserted = []
+        for edge in edge_specs:
+            if not isinstance(edge, dict):
+                continue
+
+            source_id = str(edge.get("source_id", "")).strip()
+            target_id = str(edge.get("target_id", "")).strip()
+            text = str(edge.get("text", "")).strip()
+            if not source_id or not target_id or not text or source_id == target_id:
+                continue
+            if not self._node_exists(source_id) or not self._node_exists(target_id):
+                continue
+
+            src, dst = sorted([source_id, target_id])
+            self.cursor.execute(
+                '''
+                INSERT OR IGNORE INTO model_edges (source_id, target_id, text, created_by)
+                VALUES (?, ?, ?, ?)
+                ''',
+                (src, dst, text, created_by),
+            )
+            if self.cursor.rowcount:
+                inserted.append((src, dst, text))
+
+        self.conn.commit()
+        return inserted
+
+    def resolve_scene_edge_intents(self, edge_intents, add_result, recent_graph_context):
+        if not edge_intents:
+            return []
+
+        recent_node_ids = {
+            str(node.get("id", "")).strip()
+            for node in (recent_graph_context or {}).get("nodes", [])
+            if str(node.get("id", "")).strip()
+        }
+        label_to_node_ids = (add_result or {}).get("label_to_node_ids", {})
+        resolved_edges = []
+
+        for intent in edge_intents:
+            source_label = str(intent.get("source_label", "")).strip()
+            source_ids = label_to_node_ids.get(source_label, [])
+            if not source_ids:
+                continue
+
+            text = str(intent.get("text", "")).strip()
+            if not text:
+                continue
+
+            target_ids = []
+            to_label = str(intent.get("to_label", "")).strip()
+            if to_label:
+                target_ids.extend(label_to_node_ids.get(to_label, []))
+
+            to_node_id = str(intent.get("to_node_id", "")).strip()
+            if to_node_id and to_node_id in recent_node_ids:
+                target_ids.append(to_node_id)
+
+            for source_id in source_ids:
+                for target_id in target_ids:
+                    if source_id == target_id:
+                        continue
+                    resolved_edges.append({
+                        "source_id": source_id,
+                        "target_id": target_id,
+                        "text": text,
+                    })
+
+        return self.insert_model_edges(resolved_edges, created_by="scene_vlm")
 
     def get_recent_graph_context(self, limit=10):
         limit = max(0, int(limit))
@@ -721,15 +477,29 @@ class GraphBuilder:
         )
         edge_rows = self.cursor.fetchall()
 
+        self.cursor.execute(
+            f'''
+            SELECT source_id, target_id, text, created_by
+            FROM model_edges
+            WHERE source_id IN ({recent_placeholders})
+               OR target_id IN ({recent_placeholders})
+            ''',
+            tuple(recent_ids + recent_ids),
+        )
+        model_edge_rows = self.cursor.fetchall()
+
         node_ids = set(recent_ids)
         for source_id, target_id, _ in edge_rows:
+            node_ids.add(source_id)
+            node_ids.add(target_id)
+        for source_id, target_id, _, _ in model_edge_rows:
             node_ids.add(source_id)
             node_ids.add(target_id)
 
         node_placeholders = ','.join('?' for _ in node_ids)
         self.cursor.execute(
             f'''
-            SELECT id, label, score
+            SELECT id, label, score, reasoning
             FROM nodes
             WHERE id IN ({node_placeholders})
             ''',
@@ -743,8 +513,9 @@ class GraphBuilder:
                     "id": node_id,
                     "label": label,
                     "score": self._to_float(score),
+                    "reasoning": reasoning or "",
                 }
-                for node_id, label, score in node_rows
+                for node_id, label, score, reasoning in node_rows
             ],
             "edges": [
                 {
@@ -754,10 +525,20 @@ class GraphBuilder:
                 }
                 for source_id, target_id, weight in edge_rows
             ],
+            "model_edges": [
+                {
+                    "source_id": source_id,
+                    "target_id": target_id,
+                    "text": text,
+                    "created_by": created_by,
+                }
+                for source_id, target_id, text, created_by in model_edge_rows
+            ],
         }
 
     def render_2d_graph_frame(self, view=None):
-        nodes_data, edges, _ = self._get_nodes_and_edges(view)
+        nodes_data, edges, _ = self._get_nodes_and_edges()
+        model_edges = self._get_model_edges()
 
         if not nodes_data:
             return None
@@ -765,9 +546,18 @@ class GraphBuilder:
         G = nx.Graph()
         G.add_nodes_from(nodes_data.keys())
         G.add_weighted_edges_from([(src, dst, w) for src, dst, w in edges])
+        model_edge_pairs = [
+            (src, dst)
+            for src, dst, _ in model_edges
+            if src in nodes_data and dst in nodes_data
+        ]
+        G.add_edges_from(model_edge_pairs)
 
-        if len(G.edges()) > 0:
-            G = nx.minimum_spanning_tree(G, weight='weight')
+        spatial_graph = nx.Graph()
+        spatial_graph.add_nodes_from(nodes_data.keys())
+        spatial_graph.add_weighted_edges_from([(src, dst, w) for src, dst, w in edges])
+        if len(spatial_graph.edges()) > 0:
+            spatial_graph = nx.minimum_spanning_tree(spatial_graph, weight='weight')
 
         fig, ax = plt.subplots(figsize=(8, 5))
 
@@ -776,29 +566,80 @@ class GraphBuilder:
             100 + (nodes_data[node_id]['score'] / 100.0) * 1000
             for node_id in G.nodes()
         ]
-        node_colors = [tuple(c / 255.0 for c in nodes_data[node_id]['color'][::-1]) for node_id in G.nodes()]
+        node_colors = [
+            tuple(channel / 255.0 for channel in nodes_data[node_id]['color'][::-1])
+            for node_id in G.nodes()
+        ]
         node_labels = {node_id: nodes_data[node_id]['label'] for node_id in G.nodes()}
 
-        nx.draw(
+        nx.draw_networkx_nodes(
             G,
             pos,
             ax=ax,
-            labels=node_labels,
-            with_labels=True,
             node_size=node_sizes,
             node_color=node_colors,
         )
+        nx.draw_networkx_labels(
+            G,
+            pos,
+            labels=node_labels,
+            ax=ax,
+        )
+        nx.draw_networkx_edges(
+            spatial_graph,
+            pos,
+            ax=ax,
+            edge_color="black",
+            width=1.4,
+        )
+        if model_edge_pairs:
+            nx.draw_networkx_edges(
+                G,
+                pos,
+                ax=ax,
+                edgelist=model_edge_pairs,
+                edge_color="#b000b8",
+                style="dashed",
+                width=1.8,
+            )
+
         edge_labels = {
             (src, dst): int(round(data.get('weight', 0)))
-            for src, dst, data in G.edges(data=True)
+            for src, dst, data in spatial_graph.edges(data=True)
         }
         nx.draw_networkx_edge_labels(
-            G,
+            spatial_graph,
             pos,
             edge_labels=edge_labels,
             ax=ax,
             font_size=8,
         )
+        model_edge_labels = {}
+        for src, dst, text in model_edges:
+            if src not in nodes_data or dst not in nodes_data:
+                continue
+            key = (src, dst)
+            if key in model_edge_labels:
+                model_edge_labels[key] = f"{model_edge_labels[key]}\n{text}"
+            else:
+                model_edge_labels[key] = text
+        if model_edge_labels:
+            nx.draw_networkx_edge_labels(
+                G,
+                pos,
+                edge_labels=model_edge_labels,
+                ax=ax,
+                font_size=7,
+                font_color="#8a008f",
+                rotate=False,
+                bbox={
+                    "boxstyle": "round,pad=0.15",
+                    "fc": "white",
+                    "ec": "#b000b8",
+                    "alpha": 0.75,
+                },
+            )
+        ax.axis("off")
 
         fig.canvas.draw()
         rgba = np.asarray(fig.canvas.buffer_rgba())

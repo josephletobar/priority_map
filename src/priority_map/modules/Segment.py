@@ -26,6 +26,7 @@ class Segmentation:
     label: str
     id: str
     score: float
+    reasoning: str = ""
     centroid: tuple[int, int] | None = None
     geo_pos: tuple[float, float, float] | None = None
 
@@ -122,7 +123,7 @@ class Segment():
 
         return map_x, map_y
 
-    def _create_segmentation(self, mask: np.ndarray, label, score, centroid=None):
+    def _create_segmentation(self, mask: np.ndarray, label, score, reasoning="", centroid=None):
         geo_pos = None
         if centroid is not None:
             geo_pos = (centroid[0] + self.cumulative_transform_dx, centroid[1] + self.cumulative_transform_dy)
@@ -132,6 +133,7 @@ class Segment():
                 mask=mask,
                 label=label,
                 score=score,
+                reasoning=reasoning,
                 id="",
                 centroid=centroid,
                 geo_pos=geo_pos,
@@ -244,6 +246,7 @@ class Segment():
 
                             label = prompt_to_label[prompt]
                             score = scene_dict[label]["score"]
+                            reasoning = scene_dict[label].get("reasoning", "")
                             centroid = self._xyxy_centroid_to_image(
                                 boxes_xyxy[i],
                                 sam_image.shape,
@@ -254,6 +257,7 @@ class Segment():
                                 mask,
                                 label,
                                 score,
+                                reasoning=reasoning,
                                 centroid=centroid,
                             )
 

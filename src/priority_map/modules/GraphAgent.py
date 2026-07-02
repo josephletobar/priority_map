@@ -42,16 +42,23 @@ class GraphAgent:
 
     def _get_context(self):
         """Query eligible nodes and return MST edges for minimal spatial structure."""
-        rows, edges, view = self.graph_builder.get_agent_graph_data()
-        all_nodes = {row[0]: row[1] for row in rows}
-        unreviewed_nodes = {row[0] for row in rows if row[2] == 0}
+        rows, spatial_edges, model_edges, view = self.graph_builder.get_agent_graph_data()
+        all_nodes = {
+            row[0]: {
+                "label": row[1],
+                "score": row[2],
+                "reasoning": row[3],
+            }
+            for row in rows
+        }
+        unreviewed_nodes = {row[0] for row in rows if row[4] == 0}
 
         if not all_nodes or not unreviewed_nodes:
-            return None, None, view
+            return None, None, None, view
 
         G = nx.Graph()
         G.add_nodes_from(all_nodes.keys())
-        G.add_weighted_edges_from(edges)
+        G.add_weighted_edges_from(spatial_edges)
 
         eligible_node_ids = set(unreviewed_nodes)
         for node_id in unreviewed_nodes:
@@ -75,33 +82,50 @@ class GraphAgent:
             mst = nx.minimum_spanning_tree(eligible_graph, weight='weight')
             mst_edges = [(u, v, d['weight']) for u, v, d in mst.edges(data=True)]
 
-        return eligible_nodes, mst_edges, view
+        eligible_model_edges = [
+            edge
+            for edge in model_edges
+            if edge[0] in eligible_nodes and edge[1] in eligible_nodes
+        ]
 
-    def _build_prompt(self, all_nodes, edges):
+        return eligible_nodes, mst_edges, eligible_model_edges, view
+
+    def _build_prompt(self, all_nodes, spatial_edges, model_edges):
         """Build LLM prompt with eligible nodes and MST edges."""
         node_list = [
             {
                 "id": node_id,
-                "score": round(score)
+                "label": node["label"],
+                "score": round(node["score"]),
+                "reasoning": node["reasoning"],
             }
-            for node_id, score in sorted(all_nodes.items())
+            for node_id, node in sorted(all_nodes.items())
         ]
-        edge_list = [
+        spatial_edge_list = [
             {
-                "from": src,
-                "from_score": round(all_nodes[src]),
-                "to": dst,
-                "to_score": round(all_nodes[dst]),
-                "dist": round(weight)
+                "source_id": src,
+                "target_id": dst,
+                "weight": round(weight)
             }
-            for src, dst, weight in edges
+            for src, dst, weight in spatial_edges
+            if src in all_nodes and dst in all_nodes
+        ]
+        model_edge_list = [
+            {
+                "source_id": src,
+                "target_id": dst,
+                "text": text,
+                "created_by": created_by,
+            }
+            for src, dst, text, created_by in model_edges
             if src in all_nodes and dst in all_nodes
         ]
 
         graph_json = json.dumps(
             {
                 "nodes": node_list,
-                "edges": edge_list
+                "spatial_edges": spatial_edge_list,
+                "model_edges": model_edge_list,
             },
             indent=2
         )
@@ -117,11 +141,11 @@ class GraphAgent:
 
     def _prepare_run(self):
         """Build prompt and remember which nodes this run is allowed to mark."""
-        all_nodes, edges, view = self._get_context()
+        all_nodes, spatial_edges, model_edges, view = self._get_context()
         if all_nodes is None:
             return None
 
-        prompt = self._build_prompt(all_nodes, edges)
+        prompt = self._build_prompt(all_nodes, spatial_edges, model_edges)
         return {
             "prompt": prompt,
             "node_ids": list(all_nodes.keys()),
@@ -255,6 +279,13 @@ class GraphAgent:
 
         return changes
 
+    def _insert_edges(self, edges):
+        inserted = self.graph_builder.insert_model_edges(
+            edges,
+            created_by="graph_agent",
+        )
+        return inserted
+
     def _handle_model_result(self, response, raw_output, elapsed, node_ids, view):
         """Apply model output to SQLite. Must run on the main thread."""
         self._debug_print(f"\n=== Graph Agent ===")
@@ -272,6 +303,7 @@ class GraphAgent:
 
         updates = response.get("updates", [])
         changes = self._update_scores(updates, view)
+        inserted_edges = self._insert_edges(response.get("edges", []))
         self._mark_reviewed(node_ids, view)
 
         if changes:
@@ -279,6 +311,10 @@ class GraphAgent:
                 self._debug_print(f"  {node_id}: {old:.0f}→{new:.0f}")
         else:
             self._debug_print(f"Updates: None")
+
+        if inserted_edges:
+            for source_id, target_id, text in inserted_edges:
+                self._debug_print(f"  edge {source_id}<->{target_id}: {text}")
 
         self._debug_print(f"=== End Graph Agent ===\n")
 
