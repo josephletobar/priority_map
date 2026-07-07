@@ -232,16 +232,13 @@ class PriorityMapRunner:
         return cv2.resize(image, resized_size, interpolation=cv2.INTER_AREA)
 
     def _gps_row_for_image(self, image_name):
-        if self.gps_csv_path is None or not self.gps_csv_path.exists():
+        if self.gps_csv_path is None:
             return None
 
-        try:
-            gps_csv = pd.read_csv(self.gps_csv_path)
-        except (OSError, pd.errors.EmptyDataError, pd.errors.ParserError):
-            return None
+        gps_csv = pd.read_csv(self.gps_csv_path)
 
         if "name" not in gps_csv.columns:
-            return None
+            raise ValueError(f"{self.gps_csv_path} must contain a 'name' column.")
 
         matches = gps_csv[gps_csv["name"].astype(str) == str(image_name)]
         if matches.empty:
@@ -267,8 +264,7 @@ class PriorityMapRunner:
             image = cv2.imread(str(image_path))
 
             if image is None:
-                print(f"Skipping unreadable image: {image_path}")
-                continue
+                raise FileNotFoundError(f"Could not read image: {image_path}")
 
             image = self._resize_input_image(image)
 
@@ -305,10 +301,7 @@ class PriorityMapRunner:
         localizer = self.gps_localizer if has_gps else self.flow_localizer
 
         for segmentation in segmentations:
-            try:
-                geo_pos = localizer.localize(segmentation, context)
-            except Exception:
-                geo_pos = None
+            geo_pos = localizer.localize(segmentation, context)
 
             if geo_pos is not None:
                 segmentation.geo_pos = geo_pos
@@ -320,7 +313,6 @@ class PriorityMapRunner:
             return
 
         self._closed = True
-        errors = []
 
         # Release video writers/windows before slower shutdown work so Ctrl+C
         # cannot leave the output file waiting on unrelated cleanup.
@@ -334,13 +326,7 @@ class PriorityMapRunner:
             cleanup_steps.append(("graph agent", self.graph_agent.close))
 
         for name, close in cleanup_steps:
-            try:
-                close()
-            except Exception as exc:
-                errors.append((name, exc))
-
-        for name, exc in errors:
-            print(f"Cleanup warning ({name}): {exc}")
+            close()
 
     def run_frame(self):
         if self.graph_agent is not None:

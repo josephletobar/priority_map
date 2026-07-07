@@ -86,10 +86,7 @@ def create_video_writer(image, output_dir="examples", filename="video.avi", fps=
 
         video_writer.release()
         failed.append(f"{output_path} ({codec})")
-        try:
-            output_path.unlink(missing_ok=True)
-        except OSError:
-            pass
+        output_path.unlink(missing_ok=True)
 
     raise RuntimeError(f"Failed to open video writer. Tried: {', '.join(failed)}")
 
@@ -123,11 +120,8 @@ def get_video_writer(video_writer, image, output_dir, filename="video.avi", fram
 
 
 def screen_size(default=(1280, 720)):
-    try:
-        user32 = ctypes.windll.user32
-        return user32.GetSystemMetrics(0), user32.GetSystemMetrics(1)
-    except Exception:
-        return default
+    user32 = ctypes.windll.user32
+    return user32.GetSystemMetrics(0), user32.GetSystemMetrics(1)
 
 
 def resize_to_screen(image, margin=PREVIEW_MARGIN):
@@ -308,10 +302,7 @@ class VideoOutput:
         self.video_writer = None
         self.video_frame_size = None
         if self.show and self.window_name:
-            try:
-                cv2.destroyWindow(self.window_name)
-            except cv2.error:
-                pass
+            cv2.destroyWindow(self.window_name)
 
 
 def label_mask(masks: list[str], image: np.ndarray, segmentations: list):
@@ -357,8 +348,7 @@ def label_mask(masks: list[str], image: np.ndarray, segmentations: list):
 
 def safe_imwrite(path: str, image: np.ndarray, max_dim: int = 8000) -> bool:
     if image is None:
-        print(f"Failed to save {path}: image is None")
-        return False
+        raise ValueError(f"Failed to save {path}: image is None")
 
     h, w = image.shape[:2]
 
@@ -377,11 +367,7 @@ def safe_imwrite(path: str, image: np.ndarray, max_dim: int = 8000) -> bool:
             interpolation=cv2.INTER_AREA
         )
 
-    try:
-        saved = cv2.imwrite(path, image)
-        if not saved:
-            print(f"Failed to save {path}: cv2.imwrite returned False")
-        return saved
-    except Exception as e:
-        print(f"Failed to save {path}: {e}")
-        return False
+    saved = cv2.imwrite(path, image)
+    if not saved:
+        raise OSError(f"Failed to save {path}: cv2.imwrite returned False")
+    return saved

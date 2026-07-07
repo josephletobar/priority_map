@@ -137,11 +137,8 @@ class GraphBuilder:
         if not mask_blob:
             return np.ones((1, 1), dtype=np.uint8)
 
-        try:
-            with np.load(BytesIO(mask_blob), allow_pickle=False) as data:
-                return data["mask"].astype(np.uint8)
-        except Exception:
-            return np.ones((1, 1), dtype=np.uint8)
+        with np.load(BytesIO(mask_blob), allow_pickle=False) as data:
+            return data["mask"].astype(np.uint8)
 
     def _score_to_jet_color(self, score):
         heat_value = np.uint8([[np.clip(score, 0, 100) * 2.55]])
@@ -158,18 +155,12 @@ class GraphBuilder:
 
         if isinstance(value, bytes):
             for dtype in (np.float64, np.float32, np.int64, np.int32):
-                try:
-                    decoded = np.frombuffer(value, dtype=dtype)
-                    if decoded.size:
-                        return float(decoded[0])
-                except Exception:
-                    pass
+                decoded = np.frombuffer(value, dtype=dtype)
+                if decoded.size:
+                    return float(decoded[0])
             return default
 
-        try:
-            return float(value)
-        except (TypeError, ValueError):
-            return default
+        return float(value)
 
     def _get_node_pos(self, node_id):
         self.cursor.execute('SELECT geo_pos_x, geo_pos_y FROM nodes WHERE id = ?', (node_id,))
@@ -665,10 +656,7 @@ class GraphBuilder:
 
         old_score, old_b, old_g, old_r = row
         old_score = self._to_float(old_score)
-        try:
-            delta = max(-20, min(20, int(delta)))
-        except (TypeError, ValueError):
-            return None
+        delta = max(-20, min(20, int(delta)))
 
         new_score = max(0, min(100, old_score + delta))
         score_ratio = new_score / old_score if old_score > 0 else 1.0

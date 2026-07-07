@@ -174,15 +174,7 @@ class GraphAgent:
         if self.future is None or not self.future.done():
             return False
 
-        try:
-            result = self.future.result()
-        except Exception as e:
-            self._debug_print(f"\n=== Graph Agent ===")
-            self._debug_print(f"Async error: {e}")
-            self._debug_print(f"=== End Graph Agent ===\n")
-            self.future = None
-            return True
-
+        result = self.future.result()
         self.future = None
         self._handle_model_result(
             result["response"],
@@ -195,40 +187,32 @@ class GraphAgent:
 
     def _call_local_model(self, prompt):
         """Call the configured Ollama model and return parsed JSON."""
-        try:
-            response = requests.post(
-                self.ollama_url,
-                json={
-                    "model": self.model,
-                    "prompt": prompt,
-                    "stream": False,
-                    "format": "json",
-                    "keep_alive": self.keep_alive,
-                    "options": {
-                        "temperature": 0,
-                        "num_ctx": self.num_ctx,
-                    },
+        response = requests.post(
+            self.ollama_url,
+            json={
+                "model": self.model,
+                "prompt": prompt,
+                "stream": False,
+                "format": "json",
+                "keep_alive": self.keep_alive,
+                "options": {
+                    "temperature": 0,
+                    "num_ctx": self.num_ctx,
                 },
-                timeout=self.timeout
-            )
+            },
+            timeout=self.timeout,
+        )
+        response.raise_for_status()
 
-            if response.status_code != 200:
-                return None, f"API error: {response.status_code}: {response.text}"
+        result = response.json()
+        output = result.get("response", "").strip()
 
-            result = response.json()
-            output = result.get("response", "").strip()
+        json_start = output.find('{')
+        json_end = output.rfind('}') + 1
+        if json_start < 0 or json_end <= json_start:
+            raise ValueError(f"Graph agent response did not contain JSON: {output}")
 
-            json_start = output.find('{')
-            json_end = output.rfind('}') + 1
-            if json_start >= 0 and json_end > json_start:
-                try:
-                    return json.loads(output[json_start:json_end]), output
-                except json.JSONDecodeError:
-                    return None, output
-            return None, output
-
-        except Exception as e:
-            return None, str(e)
+        return json.loads(output[json_start:json_end]), output
 
     def _update_scores(self, updates, view):
         """Apply score deltas and update colors in SQLite."""

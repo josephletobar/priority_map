@@ -48,19 +48,10 @@ class LlamaVlmClient:
         # Dynamically append any extra sampling parameters passed by the user
         payload.update(extra_settings)
 
-        try:
-            response = requests.post(self.endpoint, json=payload, timeout=60)
-
-            if response.status_code == 200:
-                response_data = response.json()
-                return response_data["choices"][0]["message"]["content"]
-            else:
-                return f"API Error ({response.status_code}): {response.text}"
-
-        except requests.exceptions.ConnectionError:
-            return f"Connection Error: Could not connect to server at {self.endpoint}. Is it running?"
-        except Exception as e:
-            return f"Unexpected Error processing request: {str(e)}"
+        response = requests.post(self.endpoint, json=payload, timeout=60)
+        response.raise_for_status()
+        response_data = response.json()
+        return response_data["choices"][0]["message"]["content"]
 
 
 # --- Updated Integrated Test Execution ---

@@ -178,15 +178,11 @@ class SceneUnderstanding:
 
         # return debug()
 
-        try:
-            scene_dict = self._vlm_inference(
-                image,
-                task,
-                recent_graph_context=recent_graph_context,
-            )
-        except (json.JSONDecodeError, ValueError, KeyError, TypeError) as exc:
-            self._debug_print(f"Skipping VLM scene update: {exc}")
-            return None
+        scene_dict = self._vlm_inference(
+            image,
+            task,
+            recent_graph_context=recent_graph_context,
+        )
 
         scene_dict = self._update_vocabulary(scene_dict)
         merged_dict = self._merge_scene_dicts(scene_dict)

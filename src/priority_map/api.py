@@ -47,8 +47,5 @@ def run_priority_map(
         return runner.run()
     finally:
         runner.close()
-        try:
-            cv2.destroyAllWindows()
-            cv2.waitKey(1)
-        except cv2.error as exc:
-            print(f"Cleanup warning (OpenCV windows): {exc}")
+        cv2.destroyAllWindows()
+        cv2.waitKey(1)
