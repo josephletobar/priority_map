@@ -3,7 +3,6 @@ from ultralytics.models.sam import SAM3SemanticPredictor
 import cv2
 from dataclasses import dataclass
 import time
-from priority_map.modules.PanoramaBuilder import PanoramaBuilder
 from priority_map.scripts.video_helper import VideoOutput
 from priority_map.config import params as config
 
@@ -28,14 +27,14 @@ class Segmentation:
     id: str
     score: float
     centroid: tuple[int, int] | None = None
-    geo_pos: tuple[float, float, float] | None = None
+    geo_pos: tuple[float, float] | None = None
 
 
 @dataclass
 class SegmentationResult:
     segmentations: list[Segmentation]
     sam3_seconds: float
-
+    flow_transform: tuple[float, float]
 
 class Segment():
 
@@ -72,8 +71,6 @@ class Segment():
 
         self.transform_dx = 0
         self.transform_dy = 0
-        self.cumulative_transform_dx = 0
-        self.cumulative_transform_dy = 0
 
     def close(self):
         self.preview_output.close()
@@ -112,9 +109,6 @@ class Segment():
         self.transform_dx = float(np.median(flow[..., 0]))
         self.transform_dy = float(np.median(flow[..., 1]))
 
-        self.cumulative_transform_dx += self.transform_dx
-        self.cumulative_transform_dy += self.transform_dy
-
         x, y = np.meshgrid(np.arange(w), np.arange(h))
 
         map_x = (x + flow[..., 0]).astype(np.float32)
@@ -125,9 +119,6 @@ class Segment():
         return map_x, map_y
 
     def _create_segmentation(self, mask: np.ndarray, label, score, centroid=None):
-        geo_pos = None
-        if centroid is not None:
-            geo_pos = (centroid[0] + self.cumulative_transform_dx, centroid[1] + self.cumulative_transform_dy)
 
         self.segmentations.append(
             Segmentation(
@@ -136,7 +127,7 @@ class Segment():
                 score=score,
                 id="",
                 centroid=centroid,
-                geo_pos=geo_pos,
+                geo_pos=None,
             )
         )
 
@@ -201,12 +192,7 @@ class Segment():
                     map_x,
                     map_y,
                 )
-                if segmentation.geo_pos is not None:
-                    segmentation.geo_pos = (
-                        segmentation.geo_pos[0] + self.transform_dx,
-                        segmentation.geo_pos[1] + self.transform_dy,
-                    )
-
+    
         # Run SAM if this is a SAM step
         if scene_dict is not None:
             prompts, prompt_to_label = self._parse_dict(scene_dict)
@@ -263,4 +249,5 @@ class Segment():
         return SegmentationResult(
             segmentations=self.segmentations,
             sam3_seconds=sam3_seconds,
+            flow_transform=(self.transform_dx, self.transform_dy),
         )

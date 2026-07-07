@@ -25,7 +25,9 @@ from priority_map.modules.Heatmap import Heatmap
 from priority_map.modules.Segment import Segment
 from priority_map.modules.GraphBuilder import GraphBuilder
 from priority_map.modules.GraphAgent import GraphAgent
-from priority_map.modules.GeoLocalizer import GeoLocalizer
+from priority_map.modules.object_localizing.localizer import LocalizationContext
+from priority_map.modules.object_localizing.flow_localizer import FlowLocalizer
+from priority_map.modules.object_localizing.gps_localizer import GpsLocalizer
 from priority_map.modules.PanoramaBuilder import PanoramaBuilder
 
 load_dotenv()
@@ -132,7 +134,8 @@ class PriorityMapRunner:
             else None
         )
         self.heatmap = Heatmap(blur_spread=blur_spread)
-        self.geo_localizer = GeoLocalizer()
+        self.flow_localizer = FlowLocalizer()
+        self.gps_localizer = GpsLocalizer()
         self.masks = {m.lower() for m in self.masks}
         self.video_output = VideoOutput(
             output_dir=self.output_dir,
@@ -285,6 +288,32 @@ class PriorityMapRunner:
             )
 
         return None
+
+    def _localize_segmentations(self, segmentations, frame, image, flow_transform):
+        curr_pos = (frame.easting, frame.northing, frame.altitude)
+        context = LocalizationContext(
+            frame=frame,
+            image=image,
+            curr_pos=curr_pos,
+            flow_transform=flow_transform,
+        )
+        has_gps = (
+            frame.easting is not None
+            and frame.northing is not None
+            and frame.altitude is not None
+        )
+        localizer = self.gps_localizer if has_gps else self.flow_localizer
+
+        for segmentation in segmentations:
+            try:
+                geo_pos = localizer.localize(segmentation, context)
+            except Exception:
+                geo_pos = None
+
+            if geo_pos is not None:
+                segmentation.geo_pos = geo_pos
+
+        return segmentations
     
     def close(self):
         if self._closed:
@@ -366,6 +395,13 @@ class PriorityMapRunner:
         sam3_seconds = segmentation_result.sam3_seconds
         if segmentations is None:
             segmentations = []
+
+        segmentations = self._localize_segmentations(
+            segmentations,
+            frame,
+            image,
+            segmentation_result.flow_transform,
+        )
 
         clustered = cluster_segmentations(segmentations)
 
