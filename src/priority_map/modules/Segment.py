@@ -10,6 +10,7 @@ from priority_map.config import params as config
 FLOW_SCALE = 0.05
 SAM3_PREVIEW_MARGIN = 120
 SAM3_INFERENCE_SIZE = (720, 480)
+SAM3_PREDICTOR_IMGSZ = 644
 
 
 def _resize_for_sam(image):
@@ -59,6 +60,7 @@ class Segment():
             task="segment",
             mode="predict",
             model=str(sam_model_path),
+            imgsz=SAM3_PREDICTOR_IMGSZ,
             # half=True,  # Use FP16 for faster inference
             save=False,
             verbose=debug,

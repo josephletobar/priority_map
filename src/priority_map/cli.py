@@ -13,8 +13,19 @@ def parse_args(argv=None):
         help="Folder of images to process.",
     )
     parser.add_argument(
-        "--dataset-root",
-        help="Dataset root. Supports plain image folder. Defaults to the runner debug path.",
+        "--img-folder",
+        dest="img_folder",
+        help="Folder of images to process. Overrides the positional image_folder.",
+    )
+    parser.add_argument(
+        "--gps",
+        "--gps-csv",
+        dest="gps_csv",
+        help="Optional per-frame GPS/pose CSV with a name column matching image filenames.",
+    )
+    parser.add_argument(
+        "--camera-intrinsics",
+        help="Optional camera intrinsics path. Stored on the runner but not used yet.",
     )
     parser.add_argument(
         "--output-dir",
@@ -50,7 +61,7 @@ def parse_args(argv=None):
 def main(argv=None):
     t0 = time.perf_counter()
     args = parse_args(argv)
-    image_folder = args.image_folder or args.dataset_root
+    image_folder = args.img_folder or args.image_folder
 
     result = run_priority_map(
         image_folder=image_folder,
@@ -66,6 +77,8 @@ def main(argv=None):
         debug=args.debug,
         panoramic=args.panoramic,
         graph_agent=args.graph_agent,
+        gps_csv=args.gps_csv,
+        camera_intrinsics=args.camera_intrinsics,
     )
 
     if args.debug:

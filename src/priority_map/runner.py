@@ -33,9 +33,9 @@ load_dotenv()
 
 # DEFAULT_IMAGE_FOLDER = Path(r"D:\UAV_VisLoc_dataset\05\drone")
 # DEFAULT_IMAGE_FOLDER = Path(r"D:\Train\Train\query_images")
-DEFAULT_IMAGE_FOLDER = Path(r"D:\dronevid2")
+# DEFAULT_IMAGE_FOLDER = Path(r"D:\dronevid2")
 # DEFAULT_IMAGE_FOLDER = Path(r"D:\rtereg") 
-
+DEFAULT_IMAGE_FOLDER = None
 
 def default_output_dir() -> Path:
     return Path("examples") / time.strftime("%Y-%m-%d_%H-%M-%S")
@@ -64,6 +64,18 @@ class PriorityFrameResult:
         return self.keep_running
 
 
+@dataclass
+class FramePacket:
+    image: np.ndarray
+    frame_index: int
+    image_name: str
+    image_path: str
+    easting: float | None = None
+    northing: float | None = None
+    altitude: float | None = None
+    orientation: tuple[float, float, float, float] | None = None
+
+
 class PriorityMapRunner:
     def __init__(
         self,
@@ -81,8 +93,12 @@ class PriorityMapRunner:
         record=True,
         panoramic=False,
         graph_agent=False,
+        gps_csv: str | Path | None = None,
+        camera_intrinsics: str | Path | None = None,
     ):
         self.dataset_root = Path(image_folder) if image_folder is not None else DEFAULT_IMAGE_FOLDER
+        self.gps_csv_path = Path(gps_csv) if gps_csv is not None else None
+        self.camera_intrinsics_path = Path(camera_intrinsics) if camera_intrinsics is not None else None
         self.task = task
         self.debrief = debrief
         self.task_description = task if not debrief else f"{task}: {debrief}"
@@ -175,6 +191,9 @@ class PriorityMapRunner:
         )
 
     def _row_value(self, row, *columns, default=0.0):
+        if row is None:
+            return default
+
         for column in columns:
             if column in row and pd.notna(row[column]):
                 return row[column]
@@ -187,7 +206,7 @@ class PriorityMapRunner:
         self.index = 0
 
     def should_run_sam(self, frame):
-        return frame["frame_index"] % self.sam_step == 0
+        return frame.frame_index % self.sam_step == 0
 
     def _resize_input_image(self, image):
         if not self.max_image_edge:
@@ -209,14 +228,39 @@ class PriorityMapRunner:
         )
         return cv2.resize(image, resized_size, interpolation=cv2.INTER_AREA)
 
+    def _gps_row_for_image(self, image_name):
+        if self.gps_csv_path is None or not self.gps_csv_path.exists():
+            return None
+
+        try:
+            gps_csv = pd.read_csv(self.gps_csv_path)
+        except (OSError, pd.errors.EmptyDataError, pd.errors.ParserError):
+            return None
+
+        if "name" not in gps_csv.columns:
+            return None
+
+        matches = gps_csv[gps_csv["name"].astype(str) == str(image_name)]
+        if matches.empty:
+            return None
+
+        return matches.iloc[0]
+
+    def _orientation_from_row(self, row):
+        orientation_columns = ("orient_x", "orient_y", "orient_z", "orient_w")
+        if row is None or any(column not in row or pd.isna(row[column]) for column in orientation_columns):
+            return None
+
+        return tuple(float(row[column]) for column in orientation_columns)
+
     def get_next_frame(self):
         while self.has_next():
             frame_index = self.index
             row = self.query_csv.iloc[frame_index]
             self.index += 1
 
-            self.image_name = self._row_value(row, "name", "filename", default="")
-            image_path = (self.query_images_dir / str(self.image_name))
+            image_name = self._row_value(row, "name", "filename", default="")
+            image_path = (self.query_images_dir / str(image_name))
             image = cv2.imread(str(image_path))
 
             if image is None:
@@ -228,16 +272,17 @@ class PriorityMapRunner:
             image[:, :, 1] = (image[:, :, 1] * 0.65).astype(image.dtype)
             image[:, :, 2:3] = (image[:, :, 2:3] * 0.8).astype(image.dtype)
 
-            return {
-                "image": image,
-                "image_path": str(image_path),
-                # Position metadata is intentionally disabled for plain image-folder runs.
-                "easting": self._row_value(row, "easting"),
-                "northing": self._row_value(row, "northing"),
-                "altitude": self._row_value(row, "altitude"),
-                "orientation": None,
-                "frame_index": frame_index,
-            }
+            gps_row = self._gps_row_for_image(image_name)
+            return FramePacket(
+                image=image,
+                frame_index=frame_index,
+                image_name=str(image_name),
+                image_path=str(image_path),
+                easting=self._row_value(gps_row, "easting", default=None),
+                northing=self._row_value(gps_row, "northing", default=None),
+                altitude=self._row_value(gps_row, "altitude", default=None),
+                orientation=self._orientation_from_row(gps_row),
+            )
 
         return None
     
@@ -291,16 +336,16 @@ class PriorityMapRunner:
                 keep_running=False,
             )
 
-        image = frame["image"]
+        image = frame.image
         out = image
         vlm_seconds = 0.0
         sam3_seconds = 0.0
 
         # Position/geolocation is disabled for now so a plain folder of images just works.
         # position = (
-        #     frame["easting"],
-        #     frame["northing"],
-        #     frame["altitude"]
+        #     frame.easting,
+        #     frame.northing,
+        #     frame.altitude
         # )
 
         scene_dict = None
@@ -337,7 +382,7 @@ class PriorityMapRunner:
             for cluster in clustered:
                 cx, cy = cluster.centroid
                 writer.writerow([
-                    self.image_name,
+                    frame.image_name,
                     cluster.label,
                     cx,
                     cy,
@@ -360,7 +405,7 @@ class PriorityMapRunner:
         # Save Heatmap Individual Heatmap Images
         heatmap_images_dir = self.output_dir / "heatmap_imgs"
         heatmap_images_dir.mkdir(parents=True, exist_ok=True)
-        safe_imwrite(str(heatmap_images_dir / str(self.image_name)), heatmap_only)
+        safe_imwrite(str(heatmap_images_dir / frame.image_name), heatmap_only)
 
         if scene_dict is not None:
             self.graph_builder.add_nodes(clustered)
@@ -417,9 +462,9 @@ class PriorityMapRunner:
         self.frames_processed += 1
         total_seconds = time.perf_counter() - frame_t0
         return PriorityFrameResult(
-            image_name=str(self.image_name),
-            image_path=frame["image_path"],
-            frame_index=frame["frame_index"],
+            image_name=frame.image_name,
+            image_path=frame.image_path,
+            frame_index=frame.frame_index,
             heatmap_only=heatmap_only,
             output_frame=out,
             latency_seconds={

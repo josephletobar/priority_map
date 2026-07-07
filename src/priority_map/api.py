@@ -21,6 +21,8 @@ def run_priority_map(
     record: bool = True,
     panoramic: bool = False,
     graph_agent: bool = False,
+    gps_csv: str | Path | None = None,
+    camera_intrinsics: str | Path | None = None,
 ) -> PriorityMapResult:
     runner = PriorityMapRunner(
         image_folder=image_folder,
@@ -37,6 +39,8 @@ def run_priority_map(
         record=record,
         panoramic=panoramic,
         graph_agent=graph_agent,
+        gps_csv=gps_csv,
+        camera_intrinsics=camera_intrinsics,
     )
 
     try:
