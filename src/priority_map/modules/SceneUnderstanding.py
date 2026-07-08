@@ -4,6 +4,7 @@ import base64
 import json
 import os
 import re
+import sys
 import time
 from collections import deque
 from dotenv import load_dotenv
@@ -178,11 +179,15 @@ class SceneUnderstanding:
 
         # return debug()
 
-        scene_dict = self._vlm_inference(
-            image,
-            task,
-            recent_graph_context=recent_graph_context,
-        )
+        try:
+            scene_dict = self._vlm_inference(
+                image,
+                task,
+                recent_graph_context=recent_graph_context,
+            )
+        except (json.JSONDecodeError, ValueError, KeyError, TypeError) as exc:
+            print(f"Warning: skipping VLM scene update: {exc}", file=sys.stderr)
+            return None
 
         scene_dict = self._update_vocabulary(scene_dict)
         merged_dict = self._merge_scene_dicts(scene_dict)
