@@ -43,6 +43,15 @@ def default_output_dir() -> Path:
     return Path("examples") / time.strftime("%Y-%m-%d_%H-%M-%S")
 
 
+def is_ignored_input_artifact(path_or_name) -> bool:
+    path = Path(str(path_or_name))
+    return (
+        path.name.startswith("._")
+        or path.name == ".DS_Store"
+        or "__MACOSX" in path.parts
+    )
+
+
 @dataclass
 class PriorityMapResult:
     output_dir: Path
@@ -97,6 +106,7 @@ class PriorityMapRunner:
         graph_agent=False,
         gps_csv: str | Path | None = None,
         camera_intrinsics: str | Path | None = None,
+        scene_model: str | None = None,
     ):
         self.dataset_root = Path(image_folder) if image_folder is not None else DEFAULT_IMAGE_FOLDER
         self.gps_csv_path = Path(gps_csv) if gps_csv is not None else None
@@ -121,7 +131,10 @@ class PriorityMapRunner:
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.observations_csv = self.output_dir / "observations.csv"
 
-        self.scene_understanding = SceneUnderstanding(debug=debug)
+        self.scene_understanding = SceneUnderstanding(
+            debug=debug,
+            model=scene_model,
+        )
         self.segmentation = Segment(
             debug=debug,
             sam_thresh=sam_thresh,
@@ -163,35 +176,20 @@ class PriorityMapRunner:
     def _load_dataset_index(self):
         image_extensions = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".webp"}
 
-        old_query_csv = self.dataset_root / "query.csv"
-        old_query_images_dir = self.dataset_root / "query_images"
-
-        if old_query_csv.exists():
-            query_csv = pd.read_csv(old_query_csv)
-            if "name" not in query_csv.columns:
-                raise ValueError(f"{old_query_csv} must contain a 'name' column.")
-            if "altitude" not in query_csv.columns:
-                raise ValueError(f"{old_query_csv} must contain an 'altitude' column.")
-            return query_csv, old_query_images_dir
-
         image_files = [
             path
             for path in sorted(self.dataset_root.iterdir())
-            if path.is_file() and path.suffix.lower() in image_extensions
+            if (
+                path.is_file()
+                and path.suffix.lower() in image_extensions
+                and not is_ignored_input_artifact(path)
+            )
         ]
         if image_files:
             query_csv = pd.DataFrame({"name": [path.name for path in image_files]})
             return query_csv, self.dataset_root
 
-        csv_files = sorted(self.dataset_root.glob("*.csv"))
-        if not csv_files:
-            raise FileNotFoundError(
-                f"No images or query.csv file found in {self.dataset_root}"
-            )
-
-        raise FileNotFoundError(
-            f"Found csv file(s), but only query.csv is supported in {self.dataset_root}"
-        )
+        raise FileNotFoundError(f"No images found in {self.dataset_root}")
 
     def _row_value(self, row, *columns, default=0.0):
         if row is None:
@@ -260,6 +258,9 @@ class PriorityMapRunner:
             self.index += 1
 
             image_name = self._row_value(row, "name", "filename", default="")
+            if is_ignored_input_artifact(image_name):
+                continue
+
             image_path = (self.query_images_dir / str(image_name))
             image = cv2.imread(str(image_path))
 

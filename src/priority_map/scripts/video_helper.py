@@ -302,7 +302,10 @@ class VideoOutput:
         self.video_writer = None
         self.video_frame_size = None
         if self.show and self.window_name:
-            cv2.destroyWindow(self.window_name)
+            try:
+                cv2.destroyWindow(self.window_name)
+            except cv2.error:
+                pass
 
 
 def label_mask(masks: list[str], image: np.ndarray, segmentations: list):

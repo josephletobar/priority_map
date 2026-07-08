@@ -32,7 +32,7 @@ For each visible category, output:
   If a label comes from the mission objective, use only the concrete target category,
   not the full mission wording.
 
-- "reasoning": an interpretability explanation for why you chose this label.
+- "reasoning": a brief interpretability explanation for why you chose this label.
   First consider spatial context: where this category appears in the scene, what
   surrounds it, whether it is isolated or embedded in other categories, and how
   those spatial relationships change its mission relevance. Also consider the

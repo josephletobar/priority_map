@@ -42,6 +42,10 @@ def parse_args(argv=None):
     parser.add_argument("--blur-spread", type=float, default=config.BLUR_SPREAD)
     parser.add_argument("--sam-model-path", default=config.SAM_MODEL_PATH)
     parser.add_argument(
+        "--scene-model",
+        help="Scene VLM model. Use 'gemma' for default OpenRouter Gemma, or an OpenAI model like 'gpt-5.4'.",
+    )
+    parser.add_argument(
         "--max-image-edge",
         type=int,
         default=config.MAX_IMAGE_EDGE,
@@ -79,6 +83,7 @@ def main(argv=None):
         graph_agent=args.graph_agent,
         gps_csv=args.gps_csv,
         camera_intrinsics=args.camera_intrinsics,
+        scene_model=args.scene_model,
     )
 
     if args.debug:

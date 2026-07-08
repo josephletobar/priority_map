@@ -23,6 +23,7 @@ def run_priority_map(
     graph_agent: bool = False,
     gps_csv: str | Path | None = None,
     camera_intrinsics: str | Path | None = None,
+    scene_model: str | None = None,
 ) -> PriorityMapResult:
     runner = PriorityMapRunner(
         image_folder=image_folder,
@@ -41,11 +42,15 @@ def run_priority_map(
         graph_agent=graph_agent,
         gps_csv=gps_csv,
         camera_intrinsics=camera_intrinsics,
+        scene_model=scene_model,
     )
 
     try:
         return runner.run()
     finally:
         runner.close()
-        cv2.destroyAllWindows()
-        cv2.waitKey(1)
+        try:
+            cv2.destroyAllWindows()
+            cv2.waitKey(1)
+        except cv2.error:
+            pass

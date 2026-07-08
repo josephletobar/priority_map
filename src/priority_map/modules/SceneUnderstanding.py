@@ -13,21 +13,51 @@ from priority_map.config.prompts import GPT_VISION_PROMPT
 
 
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
-SCENE_UNDERSTANDING_MODEL = "google/gemma-4-31b-it"
+DEFAULT_GEMMA_MODEL = "google/gemma-4-31b-it"
+DEFAULT_OPENAI_MODEL = "gpt-5.4"
 
 
 class SceneUnderstanding:
-    def __init__(self, debug=False):
+    def __init__(self, debug=False, model=None, api_key=None, base_url=None):
         load_dotenv()
-        self.client = OpenAI(
-            api_key=os.getenv("OPENROUTER_API_KEY"),
-            base_url=OPENROUTER_BASE_URL,
-        )
+        self.model = self._resolve_model(model)
+        self.provider = self._provider_for_model(self.model)
+        self.client = self._create_client(api_key=api_key, base_url=base_url)
         self.debug = debug
         self.vocabulary = {}
         self.vocabulary_alpha = 0.90
         self.scene_history = deque(maxlen=1)
         self.current_scene_dict = {}
+
+    def _resolve_model(self, model):
+        requested_model = model or os.getenv("SCENE_UNDERSTANDING_MODEL")
+        if requested_model:
+            requested_model = requested_model.strip()
+            if requested_model.lower() in {"gemma", "openrouter"}:
+                return DEFAULT_GEMMA_MODEL
+            if requested_model.lower() == "openai":
+                return DEFAULT_OPENAI_MODEL
+            return requested_model
+
+        return DEFAULT_GEMMA_MODEL
+
+    def _provider_for_model(self, model):
+        normalized = model.lower()
+        if normalized.startswith("google/") or "gemma" in normalized:
+            return "gemma"
+        return "openai"
+
+    def _create_client(self, api_key=None, base_url=None):
+        if self.provider == "openai":
+            client_kwargs = {"api_key": api_key or os.getenv("OPENAI_API_KEY")}
+            if base_url:
+                client_kwargs["base_url"] = base_url
+            return OpenAI(**client_kwargs)
+
+        return OpenAI(
+            api_key=api_key or os.getenv("OPENROUTER_API_KEY"),
+            base_url=base_url or os.getenv("OPENROUTER_BASE_URL", OPENROUTER_BASE_URL),
+        )
 
     def _debug_print(self, *args, **kwargs):
         if self.debug:
@@ -152,7 +182,7 @@ class SceneUnderstanding:
 
         start = time.perf_counter()
         response = self.client.responses.create(
-            model=SCENE_UNDERSTANDING_MODEL,
+            model=self.model,
             input=[{
                 "role": "user",
                 "content": [
@@ -166,7 +196,10 @@ class SceneUnderstanding:
             }],
         )
         end = time.perf_counter()
-        self._debug_print(f"\nVLM inference time: {end - start:.2f} seconds")
+        self._debug_print(
+            f"\nVLM inference time: {end - start:.2f} seconds "
+            f"({self.provider}: {self.model})"
+        )
 
         text = response.output_text
         self._debug_print(text)

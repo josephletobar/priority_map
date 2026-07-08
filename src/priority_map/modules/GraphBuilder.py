@@ -776,18 +776,18 @@ class GraphBuilder:
             node_size=node_sizes,
             node_color=node_colors,
         )
-        edge_labels = {
-            (src, dst): int(round(data.get('weight', 0)))
-            for src, dst, data in G.edges(data=True)
-        }
-        nx.draw_networkx_edge_labels(
-            G,
-            pos,
-            edge_labels=edge_labels,
-            ax=ax,
-            font_size=8,
-        )
-
+        for src, dst, data in G.edges(data=True):
+            x1, y1 = pos[src]
+            x2, y2 = pos[dst]
+            ax.text(
+                (x1 + x2) / 2,
+                (y1 + y2) / 2,
+                str(int(round(data.get("weight", 0)))),
+                fontsize=8,
+                ha="center",
+                va="center",
+                bbox={"facecolor": "white", "edgecolor": "none", "alpha": 0.7, "pad": 1},
+            )
         fig.canvas.draw()
         rgba = np.asarray(fig.canvas.buffer_rgba())
         rgb = rgba[:, :, :3]
