@@ -75,6 +75,18 @@ class GraphBuilder:
         ''')
 
         self.cursor.execute('''
+            CREATE TABLE IF NOT EXISTS model_edges (
+                source_id TEXT NOT NULL,
+                target_id TEXT NOT NULL,
+                text TEXT NOT NULL,
+                created_by TEXT NOT NULL,
+                PRIMARY KEY (source_id, target_id, text),
+                FOREIGN KEY (source_id) REFERENCES nodes(id),
+                FOREIGN KEY (target_id) REFERENCES nodes(id)
+            )
+        ''')
+
+        self.cursor.execute('''
             CREATE TABLE IF NOT EXISTS semantic_nodes (
                 id TEXT PRIMARY KEY,
                 label TEXT NOT NULL,
@@ -118,11 +130,12 @@ class GraphBuilder:
             )
         ''')
 
-        self.cursor.execute('DELETE FROM nodes')
-        self.cursor.execute('DELETE FROM edges')
-        self.cursor.execute('DELETE FROM semantic_nodes')
+        self.cursor.execute('DELETE FROM model_edges')
         self.cursor.execute('DELETE FROM semantic_edges')
         self.cursor.execute('DELETE FROM semantic_node_members')
+        self.cursor.execute('DELETE FROM edges')
+        self.cursor.execute('DELETE FROM semantic_nodes')
+        self.cursor.execute('DELETE FROM nodes')
         self.conn.commit()
 
     def _encode_mask(self, mask):
@@ -206,6 +219,7 @@ class GraphBuilder:
         #     print(f"  {seg.label} at ({seg.geo_pos[0]:.1f}, {seg.geo_pos[1]:.1f})")
 
         new_node_ids = []
+        result = {"label_to_node_ids": {}}
         
 
         for seg in clustered_segmentations:
@@ -214,6 +228,8 @@ class GraphBuilder:
 
             match = self._find_matching_node(base_label, x, y)
             if match:
+                source_label = getattr(seg, "source_label", None) or base_label
+                result["label_to_node_ids"].setdefault(source_label, []).append(match)
                 continue
 
             node_id = self._next_node_id(base_label)
@@ -228,6 +244,8 @@ class GraphBuilder:
                   int(color[0]), int(color[1]), int(color[2]), mask_blob))
 
             new_node_ids.append((node_id, x, y))
+            source_label = getattr(seg, "source_label", None) or base_label
+            result["label_to_node_ids"].setdefault(source_label, []).append(node_id)
 
         self.conn.commit()
 
@@ -249,6 +267,74 @@ class GraphBuilder:
         self.conn.commit()
         if new_node_ids:
             self.update_semantic_nodes([node_id for node_id, _, _ in new_node_ids])
+        return result
+
+    def _node_exists(self, node_id):
+        self.cursor.execute('SELECT 1 FROM nodes WHERE id = ?', (node_id,))
+        return self.cursor.fetchone() is not None
+
+    def insert_model_edges(self, model_edges, created_by="scene_vlm"):
+        inserted = []
+        for edge in model_edges or []:
+            if not isinstance(edge, dict):
+                continue
+            source_id = str(edge.get("source_id", "")).strip()
+            target_id = str(edge.get("target_id", "")).strip()
+            edge_text = str(edge.get("text", "")).strip()
+            if not source_id or not target_id or not edge_text or source_id == target_id:
+                continue
+            if not self._node_exists(source_id) or not self._node_exists(target_id):
+                continue
+
+            source_id, target_id = sorted((source_id, target_id))
+            self.cursor.execute(
+                '''
+                INSERT OR IGNORE INTO model_edges (source_id, target_id, text, created_by)
+                VALUES (?, ?, ?, ?)
+                ''',
+                (source_id, target_id, edge_text, created_by),
+            )
+            if self.cursor.rowcount:
+                inserted.append((source_id, target_id, edge_text))
+        self.conn.commit()
+        return inserted
+
+    def resolve_scene_edge_intents(self, edge_intents, add_result, recent_graph_context):
+        label_to_node_ids = (add_result or {}).get("label_to_node_ids", {})
+        recent_node_ids = {
+            str(node.get("id", "")).strip()
+            for node in (recent_graph_context or {}).get("nodes", [])
+            if isinstance(node, dict) and str(node.get("id", "")).strip()
+        }
+        resolved = []
+        for intent in edge_intents or []:
+            if not isinstance(intent, dict):
+                continue
+            source_ids = label_to_node_ids.get(str(intent.get("source_label", "")).strip(), [])
+            edge_text = str(intent.get("text", "")).strip()
+            if not source_ids or not edge_text:
+                continue
+
+            target_ids = []
+            to_label = str(intent.get("to_label", "")).strip()
+            if to_label:
+                target_ids.extend(label_to_node_ids.get(to_label, []))
+            to_node_id = str(intent.get("to_node_id", "")).strip()
+            if to_node_id and to_node_id in recent_node_ids:
+                target_ids.append(to_node_id)
+
+            for source_id in source_ids:
+                for target_id in dict.fromkeys(target_ids):
+                    resolved.append({
+                        "source_id": source_id,
+                        "target_id": target_id,
+                        "text": edge_text,
+                    })
+        return self.insert_model_edges(resolved, created_by="scene_vlm")
+
+    def _get_model_edges(self):
+        self.cursor.execute('SELECT source_id, target_id, text FROM model_edges')
+        return self.cursor.fetchall()
 
     def _base_rows_to_clustered(self, node_ids):
         if not node_ids:
@@ -682,7 +768,7 @@ class GraphBuilder:
     def get_recent_graph_context(self, limit=10):
         limit = max(0, int(limit))
         if limit == 0:
-            return {"nodes": [], "edges": []}
+            return {"nodes": [], "spatial_edges": [], "model_edges": []}
 
         self.cursor.execute(
             '''
@@ -695,7 +781,7 @@ class GraphBuilder:
         )
         recent_ids = [row[0] for row in self.cursor.fetchall()]
         if not recent_ids:
-            return {"nodes": [], "edges": []}
+            return {"nodes": [], "spatial_edges": [], "model_edges": []}
 
         recent_placeholders = ','.join('?' for _ in recent_ids)
         self.cursor.execute(
@@ -709,8 +795,22 @@ class GraphBuilder:
         )
         edge_rows = self.cursor.fetchall()
 
+        self.cursor.execute(
+            f'''
+            SELECT source_id, target_id, text, created_by
+            FROM model_edges
+            WHERE source_id IN ({recent_placeholders})
+               OR target_id IN ({recent_placeholders})
+            ''',
+            tuple(recent_ids + recent_ids),
+        )
+        model_edge_rows = self.cursor.fetchall()
+
         node_ids = set(recent_ids)
         for source_id, target_id, _ in edge_rows:
+            node_ids.add(source_id)
+            node_ids.add(target_id)
+        for source_id, target_id, _, _ in model_edge_rows:
             node_ids.add(source_id)
             node_ids.add(target_id)
 
@@ -734,7 +834,7 @@ class GraphBuilder:
                 }
                 for node_id, label, score in node_rows
             ],
-            "edges": [
+            "spatial_edges": [
                 {
                     "source_id": source_id,
                     "target_id": target_id,
@@ -742,20 +842,31 @@ class GraphBuilder:
                 }
                 for source_id, target_id, weight in edge_rows
             ],
+            "model_edges": [
+                {
+                    "source_id": source_id,
+                    "target_id": target_id,
+                    "text": text,
+                    "created_by": created_by,
+                }
+                for source_id, target_id, text, created_by in model_edge_rows
+            ],
         }
 
     def render_2d_graph_frame(self, view=None):
-        nodes_data, edges, _ = self._get_nodes_and_edges(view)
+        nodes_data, _, _ = self._get_nodes_and_edges("base")
+        model_edges = self._get_model_edges()
 
         if not nodes_data:
             return None
 
         G = nx.Graph()
         G.add_nodes_from(nodes_data.keys())
-        G.add_weighted_edges_from([(src, dst, w) for src, dst, w in edges])
-
-        if len(G.edges()) > 0:
-            G = nx.minimum_spanning_tree(G, weight='weight')
+        G.add_edges_from(
+            (src, dst)
+            for src, dst, _ in model_edges
+            if src in nodes_data and dst in nodes_data
+        )
 
         fig, ax = plt.subplots(figsize=(8, 5))
 
@@ -776,17 +887,21 @@ class GraphBuilder:
             node_size=node_sizes,
             node_color=node_colors,
         )
-        for src, dst, data in G.edges(data=True):
-            x1, y1 = pos[src]
-            x2, y2 = pos[dst]
-            ax.text(
-                (x1 + x2) / 2,
-                (y1 + y2) / 2,
-                str(int(round(data.get("weight", 0)))),
-                fontsize=8,
-                ha="center",
-                va="center",
-                bbox={"facecolor": "white", "edgecolor": "none", "alpha": 0.7, "pad": 1},
+        edge_labels = {}
+        for source_id, target_id, edge_text in model_edges:
+            if source_id not in nodes_data or target_id not in nodes_data:
+                continue
+            key = (source_id, target_id)
+            edge_labels[key] = f"{edge_labels[key]}\n{edge_text}" if key in edge_labels else edge_text
+        if edge_labels:
+            nx.draw_networkx_edge_labels(
+                G,
+                pos,
+                edge_labels=edge_labels,
+                ax=ax,
+                font_size=7,
+                rotate=False,
+                bbox={"facecolor": "white", "edgecolor": "none", "alpha": 0.75, "pad": 1},
             )
         fig.canvas.draw()
         rgba = np.asarray(fig.canvas.buffer_rgba())

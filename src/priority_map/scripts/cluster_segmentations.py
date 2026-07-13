@@ -16,6 +16,7 @@ class ClusteredSegmentation:
     mask: np.ndarray  # merged mask of all clustered segmentations
     geo_pos: tuple[float, float]  # global position (centroid + accumulated transform)
     color: tuple[int, int, int] | None = None  # color for visualization (optional)
+    source_label: str | None = None  # original VLM label used to resolve edge intents
 
 def cluster_segmentations(segmentations, distance_threshold=config.SEGMENTATION_CLUSTER_DISTANCE_THRESHOLD):
     """Cluster segmentations by label and spatial proximity.
@@ -72,6 +73,7 @@ def cluster_segmentations(segmentations, distance_threshold=config.SEGMENTATION_
                 count=count,
                 mask=merged_mask,
                 geo_pos=avg_geo_pos,
+                source_label=label,
             ))
 
             

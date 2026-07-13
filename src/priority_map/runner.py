@@ -170,7 +170,6 @@ class PriorityMapRunner:
         self.heat_panoramic_builder = PanoramaBuilder(alpha=0.9)
         self.panoramic_builder = PanoramaBuilder(alpha=0.15)
         self.last_graph_frame = None
-        self.graph_view = "base"
         self._closed = False
 
     def _load_dataset_index(self):
@@ -365,14 +364,19 @@ class PriorityMapRunner:
         # )
 
         scene_dict = None
+        scene_edge_intents = []
+        recent_graph_context = {"nodes": [], "spatial_edges": [], "model_edges": []}
         if self.should_run_sam(frame):
             vlm_t0 = time.perf_counter()
             recent_graph_context = self.graph_builder.get_recent_graph_context(limit=10)
-            scene_dict = self.scene_understanding.get_labels(
+            scene_result = self.scene_understanding.get_labels(
                 image,
                 self.task_description,
                 recent_graph_context=recent_graph_context,
             )
+            if scene_result is not None:
+                scene_dict = scene_result.labels
+                scene_edge_intents = scene_result.edge_intents
             vlm_seconds = time.perf_counter() - vlm_t0
         # print(scene_dict)
 
@@ -431,8 +435,13 @@ class PriorityMapRunner:
         safe_imwrite(str(heatmap_images_dir / frame.image_name), heatmap_only)
 
         if scene_dict is not None:
-            self.graph_builder.add_nodes(clustered)
-            graph_frame = self.graph_builder.render_2d_graph_frame(view=self.graph_view)
+            add_result = self.graph_builder.add_nodes(clustered)
+            self.graph_builder.resolve_scene_edge_intents(
+                scene_edge_intents,
+                add_result,
+                recent_graph_context,
+            )
+            graph_frame = self.graph_builder.render_2d_graph_frame()
             if graph_frame is not None:
                 self.last_graph_frame = graph_frame
 
@@ -477,11 +486,10 @@ class PriorityMapRunner:
 
         keep_running = self.video_output.handle_frame(
             out,
-            header=f"Task: {self.task} | Graph Level {1 if self.graph_view == 'semantic' else 2}",
+            header=f"Task: {self.task}",
             side_image=mask_frame,
             side_header=f"Mask(s): {', '.join(sorted(self.masks)) or 'None'}",
         )
-        self._handle_graph_view_key()
         self.frames_processed += 1
         total_seconds = time.perf_counter() - frame_t0
         return PriorityFrameResult(
@@ -498,24 +506,6 @@ class PriorityMapRunner:
             },
             keep_running=keep_running,
         )
-
-    def _handle_graph_view_key(self):
-        key = self.video_output.last_key
-        if key == ord("1"):
-            self._set_graph_view("semantic")
-        elif key == ord("2"):
-            self._set_graph_view("base")
-
-    def _set_graph_view(self, view):
-        if self.graph_view == view:
-            return
-
-        self.graph_view = view
-        graph_frame = self.graph_builder.render_2d_graph_frame(view=self.graph_view)
-        if graph_frame is not None:
-            self.last_graph_frame = graph_frame
-        if self.debug:
-            print(f"Graph view: {self.graph_view}")
 
     def result(self):
         return PriorityMapResult(

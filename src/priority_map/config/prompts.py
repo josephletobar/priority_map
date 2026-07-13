@@ -8,13 +8,14 @@ Mission objective: {task}
 Existing vocabulary for consistency: {vocabulary}
 The existing vocabulary contains previously detected labels and their prior relevance scores.
 Reuse labels when appropriate and keep scores reasonably stable across similar frames.
-Do not reuse if the new observation is uniquely distinct.
+Do not reuse if the new observation is uniquely distinct. For example, forest and trees are different
 Do not make large score changes unless the scene meaningfully changes such that new evidence justifies it.
 
 Recent graph context from previous frames: {recent_graph_context}
-This contains recent map nodes and edges connected to those nodes. Use it as prior
-spatial and semantic context for continuity and score stability, but do not treat
-it as proof that anything is visible in the current image.
+This contains recent map nodes, numeric spatial edges, and VLM-written freeform
+edges connected to those nodes. Use it as prior spatial and semantic context for
+continuity and score stability, but do not treat it as proof that anything is
+visible in the current image.
 When assigning current priority scores, reason about whether the recent graph
 context changes the likely broader environment, nearby category relationships,
 or mission relevance of the current scene labels.
@@ -61,6 +62,17 @@ For each visible category, output:
   Prioritize distinct, localized evidence of the target over common scene clutter; 
   assign low priority to widespread background elements unless they contain specific target-like cues.
 
+- "edges": optional relationships originating from this label.
+  Use "to_label" to connect to another label in this response, or "to_node_id"
+  to connect to an existing node from recent graph context. The "text" must be a
+  concise relationship label containing only one or two lowercase words joined
+  by a single underscore. Do not put explanations, evidence, or full sentences
+  in edge text; put that detail in the source label's "reasoning" field instead.
+  The relationship itself may be spatial, functional, semantic, contextual,
+  causal, hierarchical, evidential, uncertainty-related, or abstract.
+  Create an edge only when it adds useful information beyond the labels existing
+  separately. Return an empty list when no relationship is worth preserving.
+
 Scoring guide:
 - 0 = not relevant
 - 25 = weak context
@@ -83,14 +95,22 @@ Rules:
 - Use recent graph context when it changes likely broader environment, continuity, or score stability
 - For each label, reason about spatial context and mission relevance first, then output the score after that reasoning
 - Each reasoning field must include both positive and limiting factors for the score unless the score is exactly 0 or 100
+- Edge relationship types are freeform, but their text must use the compact one-
+  or two-word label format described above
 
 Return exactly one valid JSON object with double-quoted keys and strings, no trailing commas, and no markdown.
 
 Placeholder schema only:
 {{
-    "<simple_localization_label>": {{
-        "reasoning": "<interpretability explanation written before choosing the score>",
-        "score": <integer_0_to_100>
+    "labels": {{
+        "<simple_localization_label>": {{
+            "reasoning": "<interpretability explanation written before choosing the score>",
+            "score": <integer_0_to_100>,
+            "edges": [
+                {{"to_label": "<another_current_label>", "text": "<compact_relationship_label>"}},
+                {{"to_node_id": "<recent_graph_node_id>", "text": "<compact_relationship_label>"}}
+            ]
+        }}
     }}
 }}
 """

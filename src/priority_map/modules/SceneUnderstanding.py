@@ -7,6 +7,7 @@ import re
 import sys
 import time
 from collections import deque
+from dataclasses import dataclass
 from dotenv import load_dotenv
 from openai import OpenAI
 from priority_map.config.prompts import GPT_VISION_PROMPT
@@ -15,6 +16,12 @@ from priority_map.config.prompts import GPT_VISION_PROMPT
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 DEFAULT_GEMMA_MODEL = "google/gemma-4-31b-it"
 DEFAULT_OPENAI_MODEL = "gpt-5.4"
+
+
+@dataclass
+class SceneUnderstandingResult:
+    labels: dict
+    edge_intents: list[dict]
 
 
 class SceneUnderstanding:
@@ -39,7 +46,7 @@ class SceneUnderstanding:
                 return DEFAULT_OPENAI_MODEL
             return requested_model
 
-        return DEFAULT_GEMMA_MODEL
+        return DEFAULT_OPENAI_MODEL
 
     def _provider_for_model(self, model):
         normalized = model.lower()
@@ -135,11 +142,15 @@ class SceneUnderstanding:
 
         return obj
 
-    def _normalize_scene_dict(self, scene_dict):
+    def _normalize_scene_response(self, scene_response):
         normalized = {}
+        edge_intents = []
 
+        if not isinstance(scene_response, dict):
+            raise ValueError(f"Expected scene response, got {type(scene_response).__name__}")
+        scene_dict = scene_response.get("labels")
         if not isinstance(scene_dict, dict):
-            raise ValueError(f"Expected scene dictionary, got {type(scene_dict).__name__}")
+            raise ValueError("Scene response must include a labels object")
 
         for key, label_info in scene_dict.items():
             if not isinstance(label_info, dict):
@@ -159,7 +170,40 @@ class SceneUnderstanding:
                 "score": score,
             }
 
-        return normalized
+        for key, label_info in scene_dict.items():
+            source_label = str(key).strip()
+            if source_label not in normalized:
+                continue
+
+            raw_edges = label_info.get("edges", [])
+            if raw_edges is None:
+                raw_edges = []
+            if not isinstance(raw_edges, list):
+                raw_edges = []
+
+            for raw_edge in raw_edges:
+                if not isinstance(raw_edge, dict):
+                    continue
+                text = self._normalize_edge_text(raw_edge.get("text", ""))
+                to_label = str(raw_edge.get("to_label", "")).strip()
+                to_node_id = str(raw_edge.get("to_node_id", "")).strip()
+                if not text or (not to_label and not to_node_id):
+                    continue
+
+                edge_intent = {"source_label": source_label, "text": text}
+                if to_label:
+                    edge_intent["to_label"] = to_label
+                if to_node_id:
+                    edge_intent["to_node_id"] = to_node_id
+                edge_intents.append(edge_intent)
+
+        return SceneUnderstandingResult(normalized, edge_intents)
+
+    def _normalize_edge_text(self, text):
+        words = re.findall(r"[a-z0-9]+", str(text).strip().lower())
+        if not 1 <= len(words) <= 2:
+            return ""
+        return "_".join(words)
     
     def _vlm_inference(self, image, task, recent_graph_context=None):
         image = cv2.resize(
@@ -175,7 +219,7 @@ class SceneUnderstanding:
             task=task,
             vocabulary=json.dumps(self.vocabulary, indent=2),
             recent_graph_context=json.dumps(
-                recent_graph_context or {"nodes": [], "edges": []},
+                recent_graph_context or {"nodes": [], "spatial_edges": [], "model_edges": []},
                 indent=2,
             ),
         )
@@ -204,16 +248,16 @@ class SceneUnderstanding:
         text = response.output_text
         self._debug_print(text)
 
-        scene_dict = self._normalize_scene_dict(self._loads_json_object(text))
+        scene_result = self._normalize_scene_response(self._loads_json_object(text))
 
-        return scene_dict
+        return scene_result
 
     def get_labels(self, image: np.ndarray, task: str, recent_graph_context=None):
 
         # return debug()
 
         try:
-            scene_dict = self._vlm_inference(
+            scene_result = self._vlm_inference(
                 image,
                 task,
                 recent_graph_context=recent_graph_context,
@@ -222,17 +266,17 @@ class SceneUnderstanding:
             print(f"Warning: skipping VLM scene update: {exc}", file=sys.stderr)
             return None
 
-        scene_dict = self._update_vocabulary(scene_dict)
+        scene_dict = self._update_vocabulary(scene_result.labels)
         merged_dict = self._merge_scene_dicts(scene_dict)
         self.scene_history.append(scene_dict)
 
         # print(self.vocabulary)
 
-        return merged_dict
+        return SceneUnderstandingResult(merged_dict, scene_result.edge_intents)
         
 
 def debug():
-    return {
+    return SceneUnderstandingResult(labels={
         "trees": {
             "reasoning": "Chosen as a major scene category, but scored at zero because trees are not useful for the example car-search task compared with roads or vehicles.",
             "score": 0,
@@ -257,4 +301,4 @@ def debug():
             "reasoning": "Chosen because vehicles directly match the example car-search objective, so they receive the highest relevance score.",
             "score": 100,
         },
-    }
+    }, edge_intents=[])

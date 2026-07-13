@@ -61,4 +61,10 @@ If `--gps` is provided, frame metadata is matched by the CSV `name` column. With
 
 Scene understanding defaults to Gemma through OpenRouter. Use `--scene-model gpt-5.4` for OpenAI, `--scene-model gemma` for the default Gemma model, or set `SCENE_UNDERSTANDING_MODEL` in the environment.
 
-Panoramic images output into the selected output folder, respectively for heatmap and standard images.
+The knowledge-graph visualization uses compact relationship labels proposed by
+the scene VLM. Numeric proximity edges are still retained in `graph.db` and
+supplied to later scene-understanding calls as spatial context, but are not drawn.
+
+Use `--panoramic` to enable experimental panorama generation. The runner saves a
+standard stitched panorama every 10 frames under `<output-dir>/panorama` and a
+corresponding heatmap-overlay panorama under `<output-dir>/heat_panorama`.
