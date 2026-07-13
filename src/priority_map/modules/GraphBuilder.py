@@ -18,6 +18,16 @@ class GraphBuilder:
     EDGE_THRESHOLD = 600 # pixels
     SEMANTIC_K_NEAREST = 2
     SEMANTIC_SCORE_WEIGHT_GAMMA = 2.0
+    MODEL_LAYOUT_K_SCALE = 3.0
+    MODEL_LAYOUT_ATTRACTION_SCALE = 0.25
+    MODEL_LAYOUT_ITERATIONS = 200
+    MODEL_LAYOUT_SEED = 42
+    MODEL_LAYOUT_GRAVITY = 5.0
+    MODEL_LAYOUT_MIN_WEIGHT = 0.03
+    MODEL_LAYOUT_MAX_WEIGHT = 1.0
+    MODEL_EDGE_BASE_LENGTH = 0.12
+    MODEL_EDGE_LENGTH_PER_CHARACTER = 0.012
+    MODEL_EDGE_SEPARATION_PASSES = 40
 
     def __init__(self, output_dir, graph_view="base", debug=False):
         self.output_dir = Path(output_dir)
@@ -853,24 +863,113 @@ class GraphBuilder:
             ],
         }
 
-    def render_2d_graph_frame(self, view=None):
-        nodes_data, _, _ = self._get_nodes_and_edges("base")
-        model_edges = self._get_model_edges()
+    def _model_edge_labels(self, model_edges, nodes_data):
+        grouped = {}
+        for source_id, target_id, edge_text in model_edges:
+            if source_id not in nodes_data or target_id not in nodes_data:
+                continue
+            key = tuple(sorted((source_id, target_id)))
+            grouped.setdefault(key, []).append(edge_text)
+        return {key: "\n".join(labels) for key, labels in grouped.items()}
+
+    def _apply_model_layout_weights(self, graph, edge_labels):
+        if not edge_labels:
+            return
+
+        lengths = {
+            edge: max(1, sum(len(line) for line in label.splitlines()))
+            for edge, label in edge_labels.items()
+        }
+        median_length = max(1.0, float(np.median(list(lengths.values()))))
+        for source_id, target_id in graph.edges():
+            key = tuple(sorted((source_id, target_id)))
+            label_length = lengths.get(key, median_length)
+            graph[source_id][target_id]["layout_weight"] = float(np.clip(
+                self.MODEL_LAYOUT_ATTRACTION_SCALE * median_length / label_length,
+                self.MODEL_LAYOUT_MIN_WEIGHT,
+                self.MODEL_LAYOUT_MAX_WEIGHT,
+            ))
+
+    def _separate_model_edge_labels(self, positions, edge_labels):
+        positions = {
+            node_id: np.asarray(position, dtype=float).copy()
+            for node_id, position in positions.items()
+        }
+        for _ in range(self.MODEL_EDGE_SEPARATION_PASSES):
+            for (source_id, target_id), label in edge_labels.items():
+                if source_id not in positions or target_id not in positions:
+                    continue
+
+                rendered_length = max(1, sum(len(line) for line in label.splitlines()))
+                desired_length = (
+                    self.MODEL_EDGE_BASE_LENGTH
+                    + self.MODEL_EDGE_LENGTH_PER_CHARACTER * rendered_length
+                )
+                delta = positions[target_id] - positions[source_id]
+                distance = float(np.linalg.norm(delta))
+                if distance >= desired_length:
+                    continue
+
+                if distance < 1e-9:
+                    delta = np.array([1.0, 0.0])
+                    distance = 1.0
+                direction = delta / distance
+                shift = direction * ((desired_length - distance) / 2.0)
+                positions[source_id] -= shift
+                positions[target_id] += shift
+        return positions
+
+    def _model_layout(self, graph, edge_labels):
+        if not graph.nodes:
+            return {}
+
+        k = self.MODEL_LAYOUT_K_SCALE / np.sqrt(max(1, graph.number_of_nodes()))
+        positions = nx.spring_layout(
+            graph,
+            k=k,
+            iterations=self.MODEL_LAYOUT_ITERATIONS,
+            seed=self.MODEL_LAYOUT_SEED,
+            weight="layout_weight",
+            method="energy",
+            gravity=self.MODEL_LAYOUT_GRAVITY,
+        )
+        return self._separate_model_edge_labels(positions, edge_labels)
+
+    def render_2d_graph_frame(self, view="model"):
+        if view not in {"model", "spatial"}:
+            raise ValueError(f"Unknown graph view: {view}")
+
+        nodes_data, spatial_edges, _ = self._get_nodes_and_edges("base")
 
         if not nodes_data:
             return None
 
         G = nx.Graph()
         G.add_nodes_from(nodes_data.keys())
-        G.add_edges_from(
-            (src, dst)
-            for src, dst, _ in model_edges
-            if src in nodes_data and dst in nodes_data
-        )
+        edge_labels = {}
+        if view == "spatial":
+            G.add_weighted_edges_from(
+                (source_id, target_id, weight)
+                for source_id, target_id, weight in spatial_edges
+                if source_id in nodes_data and target_id in nodes_data
+            )
+            if G.number_of_edges():
+                G = nx.minimum_spanning_tree(G, weight="weight")
+            pos = {node_id: data["pos"] for node_id, data in nodes_data.items()}
+            edge_labels = {
+                (source_id, target_id): str(int(round(data.get("weight", 0))))
+                for source_id, target_id, data in G.edges(data=True)
+            }
+        else:
+            model_edges = self._get_model_edges()
+            edge_labels = self._model_edge_labels(model_edges, nodes_data)
+            G.add_edges_from(edge_labels.keys())
+            self._apply_model_layout_weights(G, edge_labels)
+            pos = self._model_layout(G, edge_labels)
 
-        fig, ax = plt.subplots(figsize=(8, 5))
+        figure_size = (14, 7) if view == "model" else (8, 5)
+        fig, ax = plt.subplots(figsize=figure_size)
 
-        pos = {node_id: data['pos'] for node_id, data in nodes_data.items()}
         node_sizes = [
             100 + (nodes_data[node_id]['score'] / 100.0) * 1000
             for node_id in G.nodes()
@@ -886,20 +985,15 @@ class GraphBuilder:
             with_labels=True,
             node_size=node_sizes,
             node_color=node_colors,
+            font_size=14,
         )
-        edge_labels = {}
-        for source_id, target_id, edge_text in model_edges:
-            if source_id not in nodes_data or target_id not in nodes_data:
-                continue
-            key = (source_id, target_id)
-            edge_labels[key] = f"{edge_labels[key]}\n{edge_text}" if key in edge_labels else edge_text
         if edge_labels:
             nx.draw_networkx_edge_labels(
                 G,
                 pos,
                 edge_labels=edge_labels,
                 ax=ax,
-                font_size=7,
+                font_size=11 if view == "model" else 10,
                 rotate=False,
                 bbox={"facecolor": "white", "edgecolor": "none", "alpha": 0.75, "pad": 1},
             )

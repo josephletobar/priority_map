@@ -68,10 +68,16 @@ For each visible category, output:
   concise relationship label containing only one or two lowercase words joined
   by a single underscore. Do not put explanations, evidence, or full sentences
   in edge text; put that detail in the source label's "reasoning" field instead.
-  The relationship itself may be spatial, functional, semantic, contextual,
-  causal, hierarchical, evidential, uncertainty-related, or abstract.
-  Create an edge only when it adds useful information beyond the labels existing
-  separately. Return an empty list when no relationship is worth preserving.
+  Model edges must complement the numeric coordinate graph rather than translate
+  it into words. Do not create an edge merely because two entities are nearby,
+  adjacent, co-located, separated by some distance, or positioned in a particular
+  direction; those facts are already recoverable from their coordinates.
+  Create an edge only when the image supports a useful relationship that requires
+  interpreting how the entities affect, constrain, enable, obscure, organize, or
+  otherwise meaningfully relate to one another. The relationship must add
+  mission-relevant information that the node labels and coordinates do not already
+  provide. Prefer a few high-value edges over a dense graph. Return an empty list
+  when no such relationship is clearly supported.
 
 Scoring guide:
 - 0 = not relevant
@@ -97,6 +103,7 @@ Rules:
 - Each reasoning field must include both positive and limiting factors for the score unless the score is exactly 0 or 100
 - Edge relationship types are freeform, but their text must use the compact one-
   or two-word label format described above
+- Never use model edges as natural-language restatements of coordinate geometry
 
 Return exactly one valid JSON object with double-quoted keys and strings, no trailing commas, and no markdown.
 

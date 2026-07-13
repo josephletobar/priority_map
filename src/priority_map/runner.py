@@ -170,6 +170,7 @@ class PriorityMapRunner:
         self.heat_panoramic_builder = PanoramaBuilder(alpha=0.9)
         self.panoramic_builder = PanoramaBuilder(alpha=0.15)
         self.last_graph_frame = None
+        self.graph_view = "spatial"
         self._closed = False
 
     def _load_dataset_index(self):
@@ -441,7 +442,7 @@ class PriorityMapRunner:
                 add_result,
                 recent_graph_context,
             )
-            graph_frame = self.graph_builder.render_2d_graph_frame()
+            graph_frame = self.graph_builder.render_2d_graph_frame(view=self.graph_view)
             if graph_frame is not None:
                 self.last_graph_frame = graph_frame
 
@@ -486,10 +487,11 @@ class PriorityMapRunner:
 
         keep_running = self.video_output.handle_frame(
             out,
-            header=f"Task: {self.task}",
+            header=f"Task: {self.task} | Graph: {self.graph_view.title()}",
             side_image=mask_frame,
             side_header=f"Mask(s): {', '.join(sorted(self.masks)) or 'None'}",
         )
+        self._handle_graph_view_key()
         self.frames_processed += 1
         total_seconds = time.perf_counter() - frame_t0
         return PriorityFrameResult(
@@ -506,6 +508,26 @@ class PriorityMapRunner:
             },
             keep_running=keep_running,
         )
+
+    def _handle_graph_view_key(self):
+        key = self.video_output.last_key
+        if key == ord("1"):
+            self._set_graph_view("spatial")
+        elif key == ord("2"):
+            self._set_graph_view("model")
+
+    def _set_graph_view(self, view):
+        if view not in {"model", "spatial"}:
+            raise ValueError(f"Unknown graph view: {view}")
+        if self.graph_view == view:
+            return
+
+        self.graph_view = view
+        graph_frame = self.graph_builder.render_2d_graph_frame(view=view)
+        if graph_frame is not None:
+            self.last_graph_frame = graph_frame
+        if self.debug:
+            print(f"Graph view: {view}")
 
     def result(self):
         return PriorityMapResult(

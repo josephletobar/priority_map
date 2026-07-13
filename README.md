@@ -63,7 +63,9 @@ Scene understanding defaults to Gemma through OpenRouter. Use `--scene-model gpt
 
 The knowledge-graph visualization uses compact relationship labels proposed by
 the scene VLM. Numeric proximity edges are still retained in `graph.db` and
-supplied to later scene-understanding calls as spatial context, but are not drawn.
+supplied to later scene-understanding calls as spatial context. In the debug
+window, press `1` for the coordinate-based spatial MST or `2` for the
+force-directed VLM relationship graph. The spatial view is shown by default.
 
 Use `--panoramic` to enable experimental panorama generation. The runner saves a
 standard stitched panorama every 10 frames under `<output-dir>/panorama` and a

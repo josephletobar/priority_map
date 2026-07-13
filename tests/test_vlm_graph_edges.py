@@ -1,12 +1,15 @@
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
 
+import networkx as nx
 import numpy as np
 
 from priority_map.modules.GraphBuilder import GraphBuilder
 from priority_map.modules.SceneUnderstanding import SceneUnderstanding
+from priority_map.runner import PriorityMapRunner
 from priority_map.scripts.cluster_segmentations import ClusteredSegmentation
 
 
@@ -139,6 +142,120 @@ class GraphBuilderEdgeTests(unittest.TestCase):
 
         self.assertIsNotNone(frame)
         self.assertEqual(drawn_edge_counts, [0])
+
+    def test_spatial_view_draws_only_the_spatial_mst(self):
+        self.builder.add_nodes([
+            cluster("road", "road", (0, 0)),
+            cluster("building", "building", (100, 0)),
+            cluster("vehicle", "vehicle", (50, 80)),
+        ])
+        drawn_graphs = []
+        rendered_labels = []
+
+        def capture_draw(graph, *args, **kwargs):
+            drawn_graphs.append(graph.copy())
+
+        def capture_labels(graph, pos, edge_labels, **kwargs):
+            rendered_labels.append(edge_labels)
+
+        with (
+            patch("priority_map.modules.GraphBuilder.nx.draw", side_effect=capture_draw),
+            patch(
+                "priority_map.modules.GraphBuilder.nx.draw_networkx_edge_labels",
+                side_effect=capture_labels,
+            ),
+        ):
+            frame = self.builder.render_2d_graph_frame(view="spatial")
+
+        self.assertIsNotNone(frame)
+        self.assertEqual(drawn_graphs[0].number_of_edges(), 2)
+        self.assertEqual(len(rendered_labels[0]), 2)
+        self.assertTrue(all(label.isdigit() for label in rendered_labels[0].values()))
+
+    def test_longer_model_labels_have_weaker_attraction(self):
+        graph = nx.Graph()
+        graph.add_edges_from([("a", "b"), ("b", "c")])
+        labels = {("a", "b"): "short", ("b", "c"): "much_longer_label"}
+
+        self.builder._apply_model_layout_weights(graph, labels)
+
+        self.assertGreater(
+            graph["a"]["b"]["layout_weight"],
+            graph["b"]["c"]["layout_weight"],
+        )
+
+    def test_model_layout_rerenders_from_scratch_with_fixed_seed(self):
+        first_graph = nx.Graph([("a", "b")])
+        second_graph = nx.Graph([("a", "b"), ("b", "c")])
+        first_positions = {
+            "a": np.array([0.0, 0.0]),
+            "b": np.array([1.0, 0.0]),
+        }
+        second_positions = {
+            **first_positions,
+            "c": np.array([2.0, 0.0]),
+        }
+
+        with patch(
+            "priority_map.modules.GraphBuilder.nx.spring_layout",
+            side_effect=[first_positions, second_positions],
+        ) as spring_layout:
+            self.builder._model_layout(first_graph, {("a", "b"): "links"})
+            self.builder._model_layout(
+                second_graph,
+                {("a", "b"): "links", ("b", "c"): "relates_to"},
+            )
+
+        self.assertNotIn("pos", spring_layout.call_args_list[0].kwargs)
+        self.assertNotIn("pos", spring_layout.call_args_list[1].kwargs)
+        self.assertEqual(
+            spring_layout.call_args_list[1].kwargs["seed"],
+            self.builder.MODEL_LAYOUT_SEED,
+        )
+        self.assertEqual(spring_layout.call_args_list[1].kwargs["method"], "energy")
+        self.assertEqual(
+            spring_layout.call_args_list[1].kwargs["gravity"],
+            self.builder.MODEL_LAYOUT_GRAVITY,
+        )
+
+    def test_edge_label_length_directly_controls_minimum_distance(self):
+        positions = {
+            "short_a": np.array([0.0, 0.0]),
+            "short_b": np.array([0.01, 0.0]),
+            "long_a": np.array([0.0, 1.0]),
+            "long_b": np.array([0.01, 1.0]),
+        }
+        labels = {
+            ("short_a", "short_b"): "brief",
+            ("long_a", "long_b"): "substantially_longer",
+        }
+
+        separated = self.builder._separate_model_edge_labels(positions, labels)
+        short_distance = np.linalg.norm(separated["short_b"] - separated["short_a"])
+        long_distance = np.linalg.norm(separated["long_b"] - separated["long_a"])
+
+        self.assertGreater(long_distance, short_distance)
+
+
+class RunnerGraphViewTests(unittest.TestCase):
+    def test_graph_view_keys_switch_and_rerender(self):
+        runner = PriorityMapRunner.__new__(PriorityMapRunner)
+        runner.graph_view = "model"
+        runner.graph_builder = MagicMock()
+        runner.graph_builder.render_2d_graph_frame.return_value = np.ones((2, 2, 3))
+        runner.video_output = SimpleNamespace(last_key=ord("1"))
+        runner.last_graph_frame = None
+        runner.debug = False
+
+        runner._handle_graph_view_key()
+
+        self.assertEqual(runner.graph_view, "spatial")
+        runner.graph_builder.render_2d_graph_frame.assert_called_once_with(view="spatial")
+        self.assertIsNotNone(runner.last_graph_frame)
+
+        runner.video_output.last_key = ord("2")
+        runner._handle_graph_view_key()
+        self.assertEqual(runner.graph_view, "model")
 
 
 if __name__ == "__main__":
