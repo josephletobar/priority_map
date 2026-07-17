@@ -32,10 +32,24 @@ With an explicit output folder:
 priority-map --img-folder D:\Train\Train\query_images --gps D:\Train\Train\query.csv --output-dir examples\car_search --task "Find cars"
 ```
 
-With debug windows and graph agent enabled:
+With debug windows:
 
 ```bash
-priority-map --img-folder D:\Train\Train\query_images --gps D:\Train\Train\query.csv --debug --graph-agent --task "Find cars"
+priority-map --img-folder D:\Train\Train\query_images --gps D:\Train\Train\query.csv --debug --task "Find cars"
+```
+
+## Review an existing graph DB
+
+`priority-map-agent` revises priorities in an existing PriorityMap `graph.db` using a freeform update:
+
+```bash
+priority-map-agent examples\car_search\graph.db --update "new information for the search"
+```
+
+For an older database that does not yet record its original task, provide it once:
+
+```bash
+priority-map-agent examples\car_search\graph.db --original-task "original task" --update "new information"
 ```
 
 With optional camera intrinsics path stored for future localization work:

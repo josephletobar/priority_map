@@ -4,6 +4,7 @@ import cv2
 
 from priority_map.config import params as config
 from priority_map.runner import PriorityMapResult, PriorityMapRunner
+from priority_map.modules.GraphAgent import review_priority_map_db
 
 
 def run_priority_map(
@@ -20,7 +21,6 @@ def run_priority_map(
     debug: bool = False,
     record: bool = True,
     panoramic: bool = False,
-    graph_agent: bool = False,
     gps_csv: str | Path | None = None,
     camera_intrinsics: str | Path | None = None,
     scene_model: str | None = None,
@@ -39,7 +39,6 @@ def run_priority_map(
         debug=debug,
         record=record,
         panoramic=panoramic,
-        graph_agent=graph_agent,
         gps_csv=gps_csv,
         camera_intrinsics=camera_intrinsics,
         scene_model=scene_model,

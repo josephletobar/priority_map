@@ -122,16 +122,19 @@ Placeholder schema only:
 }}
 """
 
-GRAPH_AGENT_PROMPT = """You are analyzing aerial drone footage to help with a search task.
+GRAPH_AGENT_PROMPT = """You are reviewing a PriorityMap spatial graph.
 
-Task: {task_description}
+Original task: {original_task}
+New information: {update}
 
-You have a spatial graph of detected objects. Scores represent relevance to the task. Objects are connected by edges when they are spatially close.
+You have a spatial graph of detected objects. Scores represent relevance. Objects are connected by edges when they are spatially close.
+
+Decide how the new information should affect relevance. It may add context, change the objective, or do both. Use your judgment; do not assume a fixed interpretation.
 
 Spatial graph ("nodes" list each detected object with current relevance score 0-100; "edges" are MST edges where "dist" is distance between nodes):
 {nodes_text}
 
-The existing scores were local perception scores only. They do not account for graph structure, proximity, clusters, or task context. Your job is to add global-context corrections.
+The existing scores may not account for the new information, graph structure, proximity, or clusters. Your job is to apply global-context corrections.
 
 A node may appear in multiple edges. Do not interpret repeated edge references as duplicate nodes. Only the nodes list defines unique nodes.
 

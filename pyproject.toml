@@ -26,6 +26,7 @@ dependencies = [
 
 [project.scripts]
 priority-map = "priority_map.cli:main"
+priority-map-agent = "priority_map.agent_cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

@@ -24,7 +24,6 @@ from priority_map.modules.SceneUnderstanding import SceneUnderstanding
 from priority_map.modules.Heatmap import Heatmap
 from priority_map.modules.Segment import Segment
 from priority_map.modules.GraphBuilder import GraphBuilder
-from priority_map.modules.GraphAgent import GraphAgent
 from priority_map.modules.object_localizing.localizer import LocalizationContext
 from priority_map.modules.object_localizing.flow_localizer import FlowLocalizer
 from priority_map.modules.object_localizing.gps_localizer import GpsLocalizer
@@ -103,7 +102,6 @@ class PriorityMapRunner:
         debug=False,
         record=True,
         panoramic=False,
-        graph_agent=False,
         gps_csv: str | Path | None = None,
         camera_intrinsics: str | Path | None = None,
         scene_model: str | None = None,
@@ -141,11 +139,7 @@ class PriorityMapRunner:
             sam_model_path=sam_model_path,
         )
         self.graph_builder = GraphBuilder(output_dir=self.output_dir, debug=debug)
-        self.graph_agent = (
-            GraphAgent(self.graph_builder, self.task_description, debug=debug)
-            if graph_agent
-            else None
-        )
+        self.graph_builder.set_original_task(task)
         self.heatmap = Heatmap(blur_spread=blur_spread)
         self.flow_localizer = FlowLocalizer()
         self.gps_localizer = GpsLocalizer()
@@ -323,16 +317,10 @@ class PriorityMapRunner:
             ("SAM preview output", self.segmentation.close),
             ("graph builder", self.graph_builder.close),
         ]
-        if self.graph_agent is not None:
-            cleanup_steps.append(("graph agent", self.graph_agent.close))
-
         for name, close in cleanup_steps:
             close()
 
     def run_frame(self):
-        if self.graph_agent is not None:
-            self.graph_agent.poll_finished()
-
         frame_t0 = time.perf_counter()
         frame = self.get_next_frame()
         if frame is None:
@@ -416,6 +404,9 @@ class PriorityMapRunner:
                     cy,
                 ])
 
+        heatmap_images_dir = self.output_dir / "heatmap_imgs"
+        heatmap_images_dir.mkdir(parents=True, exist_ok=True)
+
         # Set Segmentation Types to Display MASKS
         mask_frame = None
         if self.masks:
@@ -431,8 +422,6 @@ class PriorityMapRunner:
             )
 
         # Save Heatmap Individual Heatmap Images
-        heatmap_images_dir = self.output_dir / "heatmap_imgs"
-        heatmap_images_dir.mkdir(parents=True, exist_ok=True)
         safe_imwrite(str(heatmap_images_dir / frame.image_name), heatmap_only)
 
         if scene_dict is not None:
@@ -446,8 +435,25 @@ class PriorityMapRunner:
             if graph_frame is not None:
                 self.last_graph_frame = graph_frame
 
-            if self.graph_agent is not None:
-                self.graph_agent.start_async_if_ready()
+        else:
+            self.graph_builder.assign_existing_node_ids(clustered)
+
+        # Save the DB node ID matched to each clustered mask for every frame.
+        assigned_node_ids = [
+            cluster.node_id
+            for cluster in clustered
+            if getattr(cluster, "node_id", None)
+        ]
+        max_node_id_length = max(map(len, assigned_node_ids), default=1)
+        node_ids = np.full(image.shape[:2], "", dtype=f"<U{max_node_id_length}")
+        for cluster in sorted(clustered, key=lambda cluster: cluster.score, reverse=True):
+            node_id = getattr(cluster, "node_id", None)
+            if not node_id:
+                continue
+            mask = cluster.mask.astype(bool)
+            node_ids[mask & (node_ids == "")] = node_id
+        node_ids_path = heatmap_images_dir / f"{Path(frame.image_name).stem}.nodes.npz"
+        np.savez_compressed(node_ids_path, node_ids=node_ids)
 
         if self.last_graph_frame is not None and out is not None:
             heatmap_height = out.shape[0]

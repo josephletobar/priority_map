@@ -57,17 +57,12 @@ class GraphBuilder:
                 color_b INTEGER,
                 color_g INTEGER,
                 color_r INTEGER,
-                mask_blob BLOB,
-                agent_reviewed INTEGER NOT NULL DEFAULT 0
+                mask_blob BLOB
             )
         ''')
 
         self.cursor.execute('PRAGMA table_info(nodes)')
         node_columns = {row[1] for row in self.cursor.fetchall()}
-        if 'agent_reviewed' not in node_columns:
-            self.cursor.execute(
-                'ALTER TABLE nodes ADD COLUMN agent_reviewed INTEGER NOT NULL DEFAULT 0'
-            )
         if 'mask_blob' not in node_columns:
             self.cursor.execute(
                 'ALTER TABLE nodes ADD COLUMN mask_blob BLOB'
@@ -107,8 +102,7 @@ class GraphBuilder:
                 color_b INTEGER,
                 color_g INTEGER,
                 color_r INTEGER,
-                mask_blob BLOB,
-                agent_reviewed INTEGER NOT NULL DEFAULT 0
+                mask_blob BLOB
             )
         ''')
 
@@ -139,13 +133,20 @@ class GraphBuilder:
                 FOREIGN KEY (base_node_id) REFERENCES nodes(id)
             )
         ''')
+        self.cursor.execute('''
+            CREATE TABLE IF NOT EXISTS metadata (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            )
+        ''')
+        self.conn.commit()
 
-        self.cursor.execute('DELETE FROM model_edges')
-        self.cursor.execute('DELETE FROM semantic_edges')
-        self.cursor.execute('DELETE FROM semantic_node_members')
-        self.cursor.execute('DELETE FROM edges')
-        self.cursor.execute('DELETE FROM semantic_nodes')
-        self.cursor.execute('DELETE FROM nodes')
+    def set_original_task(self, task):
+        """Persist the immutable task that created this PriorityMap DB."""
+        self.cursor.execute(
+            'INSERT OR IGNORE INTO metadata (key, value) VALUES (?, ?)',
+            ('original_task', str(task)),
+        )
         self.conn.commit()
 
     def _encode_mask(self, mask):
@@ -222,6 +223,12 @@ class GraphBuilder:
                 return node_id
         return None
 
+    def assign_existing_node_ids(self, clustered_segmentations):
+        """Attach matching DB node IDs without creating or updating graph nodes."""
+        for seg in clustered_segmentations:
+            x, y = seg.geo_pos
+            seg.node_id = self._find_matching_node(seg.label, x, y)
+
     def add_nodes(self, clustered_segmentations):
         """Add ClusteredSegmentations as nodes and create edges within 200px distance"""
         # print(f"add_nodes called with {len(clustered_segmentations)} segmentations")
@@ -238,6 +245,7 @@ class GraphBuilder:
 
             match = self._find_matching_node(base_label, x, y)
             if match:
+                seg.node_id = match
                 source_label = getattr(seg, "source_label", None) or base_label
                 result["label_to_node_ids"].setdefault(source_label, []).append(match)
                 continue
@@ -248,12 +256,13 @@ class GraphBuilder:
             mask_blob = self._encode_mask(seg.mask)
             self.cursor.execute('''
                 INSERT OR REPLACE INTO nodes
-                (id, label, score, count, geo_pos_x, geo_pos_y, color_b, color_g, color_r, mask_blob, agent_reviewed)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+                (id, label, score, count, geo_pos_x, geo_pos_y, color_b, color_g, color_r, mask_blob)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (node_id, seg.label, self._to_float(seg.score), int(seg.count), float(x), float(y),
                   int(color[0]), int(color[1]), int(color[2]), mask_blob))
 
             new_node_ids.append((node_id, x, y))
+            seg.node_id = node_id
             source_label = getattr(seg, "source_label", None) or base_label
             result["label_to_node_ids"].setdefault(source_label, []).append(node_id)
 
@@ -448,8 +457,8 @@ class GraphBuilder:
 
         self.cursor.execute('''
             INSERT INTO semantic_nodes
-            (id, label, score, count, geo_pos_x, geo_pos_y, color_b, color_g, color_r, mask_blob, agent_reviewed)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+            (id, label, score, count, geo_pos_x, geo_pos_y, color_b, color_g, color_r, mask_blob)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (
             semantic_node_id,
             semantic_cluster.label,
@@ -481,8 +490,7 @@ class GraphBuilder:
                 color_b = ?,
                 color_g = ?,
                 color_r = ?,
-                mask_blob = ?,
-                agent_reviewed = 0
+                mask_blob = ?
             WHERE id = ?
         ''', (
             semantic_cluster.label,
@@ -712,33 +720,6 @@ class GraphBuilder:
         edges = [(row[0], row[1], row[2]) for row in self.cursor.fetchall()]
 
         return nodes, edges, resolved_view
-
-    def get_agent_graph_data(self, view=None):
-        node_table, edge_table, resolved_view = self._view_tables(view)
-        self.cursor.execute(f'SELECT id, score, agent_reviewed FROM {node_table}')
-        rows = [
-            (node_id, self._to_float(score), agent_reviewed)
-            for node_id, score, agent_reviewed in self.cursor.fetchall()
-        ]
-        self.cursor.execute(f'SELECT source_id, target_id, weight FROM {edge_table}')
-        edges = self.cursor.fetchall()
-        return rows, edges, resolved_view
-
-    def count_unreviewed_nodes(self, view=None):
-        node_table, _, _ = self._view_tables(view)
-        self.cursor.execute(f'SELECT COUNT(*) FROM {node_table} WHERE agent_reviewed = 0')
-        return self.cursor.fetchone()[0]
-
-    def mark_agent_reviewed(self, node_ids, view=None):
-        if not node_ids:
-            return
-
-        node_table, _, _ = self._view_tables(view)
-        self.cursor.executemany(
-            f'UPDATE {node_table} SET agent_reviewed = 1 WHERE id = ?',
-            [(node_id,) for node_id in node_ids],
-        )
-        self.conn.commit()
 
     def apply_score_delta(self, node_id, delta, view=None):
         node_table, _, _ = self._view_tables(view)

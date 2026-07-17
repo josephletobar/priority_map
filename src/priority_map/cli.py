@@ -53,12 +53,6 @@ def parse_args(argv=None):
     )
     parser.add_argument("--debug", action="store_true")
     parser.add_argument("--panoramic", action="store_true")
-    parser.add_argument(
-        "--graph_agent",
-        "--graph-agent",
-        action="store_true",
-        help="Enable the asynchronous graph agent. Off by default.",
-    )
     return parser.parse_args(argv)
 
 
@@ -80,7 +74,6 @@ def main(argv=None):
         sam_model_path=args.sam_model_path,
         debug=args.debug,
         panoramic=args.panoramic,
-        graph_agent=args.graph_agent,
         gps_csv=args.gps_csv,
         camera_intrinsics=args.camera_intrinsics,
         scene_model=args.scene_model,
