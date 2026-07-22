@@ -97,6 +97,7 @@ class PriorityMapRunner:
         sam_step=config.SAM_STEP,
         sam_thresh=config.SAM_TRESH,
         blur_spread=config.BLUR_SPREAD,
+        dilation_scale=config.DILATION_SCALE,
         max_image_edge=config.MAX_IMAGE_EDGE,
         sam_model_path=config.SAM_MODEL_PATH,
         debug=False,
@@ -116,6 +117,7 @@ class PriorityMapRunner:
         self.sam_step = sam_step
         self.sam_thresh = sam_thresh
         self.blur_spread = blur_spread
+        self.dilation_scale = dilation_scale
         self.max_image_edge = max_image_edge
         self.sam_model_path = sam_model_path
         self.panoramic = panoramic
@@ -140,7 +142,7 @@ class PriorityMapRunner:
         )
         self.graph_builder = GraphBuilder(output_dir=self.output_dir, debug=debug)
         self.graph_builder.set_original_task(task)
-        self.heatmap = Heatmap(blur_spread=blur_spread)
+        self.heatmap = Heatmap(blur_spread=blur_spread, dilation_scale=dilation_scale)
         self.flow_localizer = FlowLocalizer()
         self.gps_localizer = GpsLocalizer()
         self.masks = {m.lower() for m in self.masks}

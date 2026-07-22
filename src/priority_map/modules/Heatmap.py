@@ -15,10 +15,15 @@ BLUR_EDGE_SCALE = 0.0627
 
 
 class Heatmap:
-    def __init__(self, blur_spread=config.BLUR_SPREAD):
+    def __init__(
+        self,
+        blur_spread=config.BLUR_SPREAD,
+        dilation_scale: float = config.DILATION_SCALE,
+    ):
         self.heat_gamma = 1.0
 
         self.BLUR_SPREAD = blur_spread
+        self.DILATION_SCALE = dilation_scale
 
         self.transform_dx = 0
         self.transform_dy = 0
@@ -67,7 +72,9 @@ class Heatmap:
     def _dilation_iterations(self, image_shape):
         height, width = image_shape[:2]
         final_edge = max(height, width)
-        return max(1, int(round(final_edge / DILATION_EDGE_DIVISOR)))
+        base_iterations = final_edge / DILATION_EDGE_DIVISOR
+        scaled_iterations = max(0.0, base_iterations * self.DILATION_SCALE)
+        return max(0, int(round(scaled_iterations)))
 
     def _scaled_blur_spread(self, image_shape):
         height, width = image_shape[:2]
