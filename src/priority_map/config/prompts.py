@@ -1,5 +1,5 @@
 GPT_VISION_PROMPT = """
-Analyze this aerial/satellite image and extract scene labels for open-vocabulary localization.
+Analyze this image and extract scene labels for open-vocabulary localization.
 
 Do not hallucinate. Only describe categories that are clearly visible.
 
@@ -20,9 +20,6 @@ When assigning current priority scores, reason about whether the recent graph
 context changes the likely broader environment, nearby category relationships,
 or mission relevance of the current scene labels.
 
-Always include the concrete target category from the mission objective with 100 percent relevance, even if it is not directly visible.
-Derive this label by removing mission/action wording and keeping only the localizable object or category being searched for.
-The target label must be a simple noun or noun phrase, not the full task wording, not a search phrase, and not a sentence.
 
 For each visible category, output:
 
@@ -87,7 +84,6 @@ Scoring guide:
 - 100 = the concrete mission target category, or directly mission-critical visible evidence
 
 Rules:
-- Include the concrete mission target category even if it is not directly visible
 - Include all major visible categories
 - Merge categories only when they are visually and functionally redundant for the mission
 - Keep related categories separate when they have distinct appearance, access patterns, or likely mission relevance
@@ -171,3 +167,6 @@ If no adjustments needed, still explain the spatial reasoning:
   "updates": []
 }}"""
 
+# Always include the concrete target category from the mission objective with 100 percent relevance, even if it is not directly visible.
+# Derive this label by removing mission/action wording and keeping only the localizable object or category being searched for.
+# The target label must be a simple noun or noun phrase, not the full task wording, not a search phrase, and not a sentence.

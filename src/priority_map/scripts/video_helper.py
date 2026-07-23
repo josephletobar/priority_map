@@ -351,7 +351,8 @@ def label_mask(masks: list[str], image: np.ndarray, segmentations: list):
 
 def safe_imwrite(path: str, image: np.ndarray, max_dim: int = 8000) -> bool:
     if image is None:
-        raise ValueError(f"Failed to save {path}: image is None")
+        print(f"Warning: Skipped saving {path} because image is None")
+        return False
 
     h, w = image.shape[:2]
 
@@ -367,10 +368,16 @@ def safe_imwrite(path: str, image: np.ndarray, max_dim: int = 8000) -> bool:
                 int(w * scale),
                 int(h * scale)
             ),
-            interpolation=cv2.INTER_AREA
+        interpolation=cv2.INTER_AREA
         )
 
-    saved = cv2.imwrite(path, image)
+    try:
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        saved = cv2.imwrite(str(path), image)
+    except Exception as exc:
+        print(f"Warning: Failed to save {path}: {type(exc).__name__}: {exc}")
+        return False
+
     if not saved:
-        raise OSError(f"Failed to save {path}: cv2.imwrite returned False")
+        print(f"Warning: Failed to save {path}: cv2.imwrite returned False")
     return saved
