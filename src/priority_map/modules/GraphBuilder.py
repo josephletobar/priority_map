@@ -2,10 +2,9 @@ import sqlite3
 from io import BytesIO
 import cv2
 import numpy as np
-import matplotlib
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
 import networkx as nx
+from matplotlib.backends.backend_agg import FigureCanvasAgg
+from matplotlib.figure import Figure
 from pathlib import Path
 from priority_map.scripts.cluster_segmentations import (
     ClusteredSegmentation,
@@ -916,14 +915,17 @@ class GraphBuilder:
         )
         return self._separate_model_edge_labels(positions, edge_labels)
 
-    def render_2d_graph_frame(self, view="model"):
+    def draw_2d_graph_axes(self, ax, view="model"):
+        """Draw a graph view on a caller-owned Matplotlib axes."""
         if view not in {"model", "spatial"}:
             raise ValueError(f"Unknown graph view: {view}")
 
         nodes_data, spatial_edges, _ = self._get_nodes_and_edges("base")
 
         if not nodes_data:
-            return None
+            ax.clear()
+            ax.set_axis_off()
+            return False
 
         G = nx.Graph()
         G.add_nodes_from(nodes_data.keys())
@@ -947,9 +949,6 @@ class GraphBuilder:
             G.add_edges_from(edge_labels.keys())
             self._apply_model_layout_weights(G, edge_labels)
             pos = self._model_layout(G, edge_labels)
-
-        figure_size = (14, 7) if view == "model" else (8, 5)
-        fig, ax = plt.subplots(figsize=figure_size)
 
         node_sizes = [
             100 + (nodes_data[node_id]['score'] / 100.0) * 1000
@@ -978,20 +977,34 @@ class GraphBuilder:
                 rotate=False,
                 bbox={"facecolor": "white", "edgecolor": "none", "alpha": 0.75, "pad": 1},
             )
+        return True
+
+    def render_2d_graph_frame(self, view="model"):
+        if view not in {"model", "spatial"}:
+            raise ValueError(f"Unknown graph view: {view}")
+
+        figure_size = (14, 7) if view == "model" else (8, 5)
+        fig = Figure(figsize=figure_size)
+        FigureCanvasAgg(fig)
+        ax = fig.subplots()
+        if not self.draw_2d_graph_axes(ax, view=view):
+            return None
+
         fig.canvas.draw()
         rgba = np.asarray(fig.canvas.buffer_rgba())
         rgb = rgba[:, :, :3]
         self.last_2d_frame = rgb[:, :, ::-1].copy()
-        plt.close(fig)
 
         return self.last_2d_frame
 
     def draw_2d_graph(self):
-        self.render_2d_graph_frame()
-        if self.last_2d_frame is not None:
-            plt.imshow(self.last_2d_frame[:, :, ::-1])
-            plt.axis("off")
-            plt.show(block=False)
+        import matplotlib.pyplot as plt
+
+        fig, ax = plt.subplots(figsize=(14, 7))
+        if not self.draw_2d_graph_axes(ax, view="model"):
+            plt.close(fig)
+            return
+        plt.show(block=False)
 
     def draw_3d_graph(self):
         return self.draw_2d_graph()
