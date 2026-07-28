@@ -85,7 +85,12 @@ class Heatmap:
         return max(1.0, scaled_spread)
 
     def _create_heatmap(self, image, regions):
-        if not regions: return image, None
+        if not regions:
+            return (
+                image,
+                None,
+                np.zeros(image.shape[:2], dtype=np.float32),
+            )
 
         h, w = image.shape[:2]
         small_size = (
@@ -143,11 +148,11 @@ class Heatmap:
         gaussian_size = self._odd_kernel_size(blur_spread * kernel_scale, max_size=min(small_size))
         heatmap = cv2.GaussianBlur(heatmap, (gaussian_size, gaussian_size), 0)
 
-        heatmap = np.clip(heatmap, 0, 100)
-        heatmap = (heatmap * 2.55).astype(np.uint8)
+        numerical_heatmap = np.clip(heatmap, 0, 100).astype(np.float32)
+        display_heatmap = (numerical_heatmap * 2.55).astype(np.uint8)
         
 
-        heatmap_colored = cv2.applyColorMap(heatmap, cv2.COLORMAP_JET)
+        heatmap_colored = cv2.applyColorMap(display_heatmap, cv2.COLORMAP_JET)
         heatmap_resized = cv2.resize(heatmap_colored, (w, h), interpolation=cv2.INTER_LINEAR)
 
         output = cv2.addWeighted(
@@ -158,7 +163,15 @@ class Heatmap:
             0         # constant brightness offset added to every pixel
         )
 
-        return cv2.resize(output, (w, h), interpolation=cv2.INTER_LINEAR), heatmap_resized
+        return (
+            cv2.resize(output, (w, h), interpolation=cv2.INTER_LINEAR),
+            heatmap_resized,
+            cv2.resize(
+                numerical_heatmap,
+                (w, h),
+                interpolation=cv2.INTER_LINEAR,
+            ),
+        )
 
     def _draw_segmentation_labels(self, image, heatmap, segmentations):
         output = image.copy()
@@ -217,7 +230,10 @@ class Heatmap:
 
     def draw_heatmap(self, image, segmentations):
 
-        heatmap_overlay, heatmap_only = self._create_heatmap(image, segmentations)
+        heatmap_overlay, heatmap_only, numerical_heatmap = self._create_heatmap(
+            image,
+            segmentations,
+        )
         heatmap_text = self._draw_segmentation_labels(heatmap_overlay, heatmap_only, segmentations)
 
         # transform = self.panoramic_transform.transform_dx, self.panoramic_transform.transform_dy
@@ -227,4 +243,4 @@ class Heatmap:
 
         self.prev_heat = heatmap_text
 
-        return heatmap_text, heatmap_only
+        return heatmap_text, heatmap_only, numerical_heatmap

@@ -22,6 +22,7 @@ from priority_map.scripts.cluster_segmentations import cluster_segmentations
 
 from priority_map.modules.SceneUnderstanding import SceneUnderstanding
 from priority_map.modules.Heatmap import Heatmap
+from priority_map.modules.Direction import get_direction
 from priority_map.modules.Segment import Segment
 from priority_map.modules.GraphBuilder import GraphBuilder
 from priority_map.modules.object_localizing.localizer import LocalizationContext
@@ -66,6 +67,8 @@ class PriorityFrameResult:
     image_path: str | None
     frame_index: int | None
     heatmap_only: np.ndarray | None
+    numerical_heatmap: np.ndarray | None
+    direction: np.ndarray | None
     output_frame: np.ndarray | None
     latency_seconds: dict[str, float]
     keep_running: bool
@@ -79,7 +82,7 @@ class FramePacket:
     image: np.ndarray
     frame_index: int
     image_name: str
-    image_path: str
+    image_path: str | None
     easting: float | None = None
     northing: float | None = None
     altitude: float | None = None
@@ -170,6 +173,9 @@ class PriorityMapRunner:
         self._closed = False
 
     def _load_dataset_index(self):
+        if self.dataset_root is None:
+            return pd.DataFrame({"name": []}), None
+
         image_extensions = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".webp"}
 
         image_files = [
@@ -225,6 +231,29 @@ class PriorityMapRunner:
         )
         return cv2.resize(image, resized_size, interpolation=cv2.INTER_AREA)
 
+    def _prepare_input_image(self, image):
+        if not isinstance(image, np.ndarray):
+            raise TypeError("image must be a NumPy array or a path to an image file.")
+        if image.size == 0:
+            raise ValueError("image must not be empty.")
+
+        if image.ndim == 2:
+            image = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
+        elif image.ndim == 3 and image.shape[2] == 4:
+            image = cv2.cvtColor(image, cv2.COLOR_BGRA2BGR)
+        elif image.ndim == 3 and image.shape[2] == 3:
+            image = image.copy()
+        else:
+            raise ValueError("image must be grayscale, BGR, or BGRA.")
+
+        if image.dtype != np.uint8:
+            image = np.clip(image, 0, 255).astype(np.uint8)
+
+        image = self._resize_input_image(image)
+        image[:, :, 1] = (image[:, :, 1] * 0.65).astype(image.dtype)
+        image[:, :, 2:3] = (image[:, :, 2:3] * 0.8).astype(image.dtype)
+        return image
+
     def _gps_row_for_image(self, image_name):
         if self.gps_csv_path is None:
             return None
@@ -263,10 +292,7 @@ class PriorityMapRunner:
             if image is None:
                 raise FileNotFoundError(f"Could not read image: {image_path}")
 
-            image = self._resize_input_image(image)
-
-            image[:, :, 1] = (image[:, :, 1] * 0.65).astype(image.dtype)
-            image[:, :, 2:3] = (image[:, :, 2:3] * 0.8).astype(image.dtype)
+            image = self._prepare_input_image(image)
 
             gps_row = self._gps_row_for_image(image_name)
             return FramePacket(
@@ -281,6 +307,55 @@ class PriorityMapRunner:
             )
 
         return None
+
+    def _frame_from_input(
+        self,
+        image: np.ndarray | str | Path,
+        *,
+        image_name: str | None = None,
+        frame_index: int | None = None,
+        easting: float | None = None,
+        northing: float | None = None,
+        altitude: float | None = None,
+        orientation: tuple[float, float, float, float] | None = None,
+    ) -> FramePacket:
+        image_path = None
+        if isinstance(image, (str, Path)):
+            source_path = Path(image)
+            loaded_image = cv2.imread(str(source_path))
+            if loaded_image is None:
+                raise FileNotFoundError(f"Could not read image: {source_path}")
+            image_path = str(source_path)
+            image_name = image_name or source_path.name
+        else:
+            loaded_image = image
+            image_name = image_name or f"frame_{self.frames_processed:06d}.png"
+
+        prepared_image = self._prepare_input_image(loaded_image)
+        gps_row = self._gps_row_for_image(image_name)
+
+        return FramePacket(
+            image=prepared_image,
+            frame_index=self.frames_processed if frame_index is None else frame_index,
+            image_name=image_name,
+            image_path=image_path,
+            easting=(
+                self._row_value(gps_row, "easting", default=None)
+                if easting is None
+                else easting
+            ),
+            northing=(
+                self._row_value(gps_row, "northing", default=None)
+                if northing is None
+                else northing
+            ),
+            altitude=(
+                self._row_value(gps_row, "altitude", default=None)
+                if altitude is None
+                else altitude
+            ),
+            orientation=orientation or self._orientation_from_row(gps_row),
+        )
 
     def _localize_segmentations(self, segmentations, frame, image, flow_transform):
         curr_pos = (frame.easting, frame.northing, frame.altitude)
@@ -304,6 +379,29 @@ class PriorityMapRunner:
                 segmentation.geo_pos = geo_pos
 
         return segmentations
+
+    def _draw_debug_direction(self, image, direction):
+        if not self.debug or image is None or np.linalg.norm(direction) == 0:
+            return image
+
+        output = image.copy()
+        height, width = output.shape[:2]
+        center = (width // 2, height // 2)
+        arrow_length = max(1, int(min(width, height) * 0.25))
+        endpoint = (
+            int(round(center[0] + direction[0] * arrow_length)),
+            int(round(center[1] - direction[1] * arrow_length)),
+        )
+        cv2.arrowedLine(
+            output,
+            center,
+            endpoint,
+            (255, 255, 255),
+            max(2, int(round(min(width, height) / 240))),
+            cv2.LINE_AA,
+            tipLength=0.25,
+        )
+        return output
     
     def close(self):
         if self._closed:
@@ -322,9 +420,30 @@ class PriorityMapRunner:
         for name, close in cleanup_steps:
             close()
 
-    def run_frame(self):
+    def run_frame(
+        self,
+        image: np.ndarray | str | Path | None = None,
+        *,
+        image_name: str | None = None,
+        frame_index: int | None = None,
+        easting: float | None = None,
+        northing: float | None = None,
+        altitude: float | None = None,
+        orientation: tuple[float, float, float, float] | None = None,
+    ):
         frame_t0 = time.perf_counter()
-        frame = self.get_next_frame()
+        if image is None:
+            frame = self.get_next_frame()
+        else:
+            frame = self._frame_from_input(
+                image,
+                image_name=image_name,
+                frame_index=frame_index,
+                easting=easting,
+                northing=northing,
+                altitude=altitude,
+                orientation=orientation,
+            )
         if frame is None:
             total_seconds = time.perf_counter() - frame_t0
             return PriorityFrameResult(
@@ -332,6 +451,8 @@ class PriorityMapRunner:
                 image_path=None,
                 frame_index=None,
                 heatmap_only=None,
+                numerical_heatmap=None,
+                direction=None,
                 output_frame=None,
                 latency_seconds={
                     "total": total_seconds,
@@ -415,13 +536,18 @@ class PriorityMapRunner:
             mask_frame = label_mask(self.masks, image, segmentations)
 
         # Create Heatmap
-        heatmap_text, heatmap_only = self.heatmap.draw_heatmap(image, clustered)
+        heatmap_text, heatmap_only, numerical_heatmap = self.heatmap.draw_heatmap(
+            image,
+            clustered,
+        )
+        direction = get_direction(numerical_heatmap)
         if heatmap_text is not None and heatmap_only is not None:
             out = heatmap_text
             self.heatmap_video_output.handle_frame(
                 heatmap_text,
                 header=f"Task: {self.task}",
             )
+        out = self._draw_debug_direction(out, direction)
 
         # Save Heatmap Individual Heatmap Images
         safe_imwrite(str(heatmap_images_dir / frame.image_name), heatmap_only)
@@ -507,6 +633,8 @@ class PriorityMapRunner:
             image_path=frame.image_path,
             frame_index=frame.frame_index,
             heatmap_only=heatmap_only,
+            numerical_heatmap=numerical_heatmap,
+            direction=direction,
             output_frame=out,
             latency_seconds={
                 "total": total_seconds,

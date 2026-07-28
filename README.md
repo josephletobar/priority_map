@@ -12,6 +12,48 @@ You can also pass the image folder positionally:
 priority-map D:\Train\Train\query_images --task "Find cars"
 ```
 
+## Process Frames as They Arrive
+
+`PriorityMapRunner` can be initialized without an image folder and reused for
+in-memory video frames:
+
+```python
+from priority_map.runner import PriorityMapRunner
+
+runner = PriorityMapRunner(task="Find cars", record=False)
+try:
+    while video_is_running:
+        image = get_next_video_frame()  # NumPy BGR, BGRA, or grayscale image
+        frame_result = runner.run_frame(image)
+        send_direction(frame_result.direction)
+finally:
+    runner.close()
+```
+
+An image path can be supplied instead:
+
+```python
+frame_result = runner.run_frame("incoming/frame_001.png")
+```
+
+Optional per-frame values such as `image_name`, `frame_index`, `easting`,
+`northing`, `altitude`, and `orientation` can be passed as keyword arguments.
+Calling `run_frame()` without an image retains the original behavior and reads
+the next image from the configured folder.
+
+Each `PriorityFrameResult` includes:
+
+- `numerical_heatmap`: the `0..100` scalar field after dilation and Gaussian
+  blur, before colorization.
+- `heatmap_only`: the JET-colored version used for display.
+- `direction`: a two-element unit vector pointing from the image center toward
+  the hottest numerical heatmap pixel.
+
+Direction vectors use navigation coordinates: positive X points right and
+positive Y points up/forward. An empty heatmap or centered hottest pixel returns
+`[0.0, 0.0]`. This is a visual navigation suggestion, not a flight-control
+command.
+
 ## Example Commands
 
 Plain image folder, using optical-flow localization:
@@ -67,6 +109,8 @@ priority-map --img-folder D:\Train\Train\query_images --scene-model gpt-5.4 --ta
 ## Notes
 
 Use `--output-dir` to choose an output folder. If omitted, outputs are written under `examples/YYYY-MM-DD_HH-MM-SS`. The CLI saves `video.avi` and `heatmap.avi` by default; use `--debug` to display frames with OpenCV and print debug logs.
+Debug output also draws the computed direction vector as an arrow from the
+center of the scene.
 
 Use `--debrief "extra task context"` to add optional context to the task prompt.
 Input images are resized to a 640px longest edge by default; use `--max-image-edge 0` to disable resizing.
