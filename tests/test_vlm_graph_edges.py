@@ -127,6 +127,47 @@ class GraphBuilderEdgeTests(unittest.TestCase):
         self.assertEqual(context["model_edges"][0]["text"], "serves")
         self.assertNotIn("edges", context)
 
+    def test_nearby_node_positions_respect_radius_and_limit(self):
+        for index, x in enumerate((1.0, 2.0, 3.0, 4.0, 6.0)):
+            self.builder.cursor.execute(
+                """
+                INSERT INTO nodes
+                (id, label, score, count, geo_pos_x, geo_pos_y,
+                 color_b, color_g, color_r, mask_blob)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    f"coverage_{index}",
+                    f"coverage_{index}",
+                    1.0,
+                    1,
+                    x,
+                    0.0,
+                    0,
+                    0,
+                    0,
+                    None,
+                ),
+            )
+        self.builder.conn.commit()
+
+        limited = self.builder.get_nearby_node_positions(
+            (0.0, 0.0),
+            radius=5,
+            limit=3,
+        )
+        all_nearby = self.builder.get_nearby_node_positions(
+            (0.0, 0.0),
+            radius=5,
+            limit=10,
+        )
+
+        self.assertEqual(limited, [(1.0, 0.0), (2.0, 0.0), (3.0, 0.0)])
+        self.assertEqual(
+            all_nearby,
+            [(1.0, 0.0), (2.0, 0.0), (3.0, 0.0), (4.0, 0.0)],
+        )
+
     def test_rendered_graph_excludes_spatial_edges(self):
         self.builder.add_nodes([
             cluster("road", "road", (0, 0)),

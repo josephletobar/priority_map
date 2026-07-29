@@ -42,17 +42,17 @@ class DirectionTests(unittest.TestCase):
         )
         self.assertAlmostEqual(float(np.linalg.norm(direction)), 1.0, places=6)
 
-    def test_centered_or_empty_heatmap_returns_zero_vector(self):
+    def test_centered_or_empty_heatmap_defaults_forward(self):
         centered = self.heatmap_with_target(50, 50)
         empty = np.zeros((101, 101), dtype=np.float32)
 
-        np.testing.assert_array_equal(
+        np.testing.assert_allclose(
             self.direction.get_direction(centered),
-            np.zeros(2, dtype=np.float32),
+            np.array([0.0, 1.0], dtype=np.float32),
         )
-        np.testing.assert_array_equal(
+        np.testing.assert_allclose(
             self.direction.get_direction(empty),
-            np.zeros(2, dtype=np.float32),
+            np.array([0.0, 1.0], dtype=np.float32),
         )
 
     def test_requires_a_two_dimensional_numerical_heatmap(self):
@@ -61,13 +61,103 @@ class DirectionTests(unittest.TestCase):
                 np.zeros((10, 10, 3), dtype=np.uint8)
             )
 
-    def test_large_hot_region_beats_a_hotter_single_pixel(self):
+    def test_patch_with_more_total_heat_beats_a_hotter_single_pixel(self):
         numerical_heatmap = np.zeros((101, 101), dtype=np.float32)
         numerical_heatmap[50, 80] = 100
         numerical_heatmap[45:56, 10:21] = 5
 
         np.testing.assert_allclose(
             self.direction.get_direction(numerical_heatmap),
+            np.array([-1.0, 0.0], dtype=np.float32),
+        )
+
+    def test_points_to_the_center_of_the_hottest_patch(self):
+        numerical_heatmap = np.zeros((101, 101), dtype=np.float32)
+        numerical_heatmap[22, 62] = 100
+
+        np.testing.assert_allclose(
+            self.direction.get_direction(numerical_heatmap),
+            np.array([1.0, 1.0], dtype=np.float32) / np.sqrt(2),
+        )
+
+    def test_came_from_and_coverage_reduce_the_search_space(self):
+        numerical_heatmap = np.zeros((101, 101), dtype=np.float32)
+        numerical_heatmap[50, 80] = 100
+        numerical_heatmap[20, 50] = 90
+        numerical_heatmap[50, 20] = 80
+
+        direction = self.direction.get_direction(
+            numerical_heatmap,
+            came_from=np.array([1.0, 0.0], dtype=np.float32),
+            coverage_directions=[
+                np.array([0.0, 1.0], dtype=np.float32),
+            ],
+        )
+
+        np.testing.assert_allclose(
+            direction,
+            np.array([-1.0, 0.0], dtype=np.float32),
+        )
+
+    def test_heat_outside_a_forbidden_cone_remains_available(self):
+        numerical_heatmap = np.zeros((101, 101), dtype=np.float32)
+        numerical_heatmap[50, 80] = 100
+
+        direction = self.direction.get_direction(
+            numerical_heatmap,
+            came_from=np.array([0.0, 1.0], dtype=np.float32),
+        )
+
+        np.testing.assert_allclose(
+            direction,
+            np.array([1.0, 0.0], dtype=np.float32),
+        )
+
+    def test_excluded_only_hot_patch_uses_an_available_patch(self):
+        numerical_heatmap = np.zeros((101, 101), dtype=np.float32)
+        numerical_heatmap[50, 80] = 100
+
+        direction = self.direction.get_direction(
+            numerical_heatmap,
+            came_from=np.array([1.0, 0.0], dtype=np.float32),
+        )
+
+        np.testing.assert_allclose(
+            direction,
+            np.array([0.0, 1.0], dtype=np.float32),
+        )
+
+    def test_all_patches_forbidden_still_returns_a_direction(self):
+        numerical_heatmap = np.zeros((101, 101), dtype=np.float32)
+        numerical_heatmap[50, 80] = 100
+
+        direction = self.direction.get_direction(
+            numerical_heatmap,
+            coverage_directions=[
+                np.array([1.0, 0.0], dtype=np.float32),
+                np.array([-1.0, 0.0], dtype=np.float32),
+                np.array([0.0, 1.0], dtype=np.float32),
+                np.array([0.0, -1.0], dtype=np.float32),
+            ],
+        )
+
+        np.testing.assert_allclose(
+            direction,
+            np.array([1.0, 0.0], dtype=np.float32),
+        )
+
+    def test_forbidden_cone_removes_the_entire_patch(self):
+        numerical_heatmap = np.zeros((101, 101), dtype=np.float32)
+        numerical_heatmap[21, 61] = 100
+        numerical_heatmap[50, 20] = 75
+
+        direction = self.direction.get_direction(
+            numerical_heatmap,
+            came_from=np.array([1.0, 0.0], dtype=np.float32),
+        )
+
+        np.testing.assert_allclose(
+            direction,
             np.array([-1.0, 0.0], dtype=np.float32),
         )
 

@@ -111,6 +111,7 @@ class PriorityMapRunner:
         gps_csv: str | Path | None = None,
         camera_intrinsics: str | Path | None = None,
         scene_model: str | None = None,
+        vector_ema_alpha: float = config.VECTOR_EMA_ALPHA,
     ):
         self.dataset_root = Path(image_folder) if image_folder is not None else DEFAULT_IMAGE_FOLDER
         self.gps_csv_path = Path(gps_csv) if gps_csv is not None else None
@@ -127,6 +128,11 @@ class PriorityMapRunner:
         self.sam_model_path = sam_model_path
         self.panoramic = panoramic
         self.debug = debug
+        if not 0 < vector_ema_alpha <= 1:
+            raise ValueError("vector_ema_alpha must be greater than 0 and at most 1.")
+        self.vector_ema_alpha = vector_ema_alpha
+        self._direction_ema = None
+        self._came_from_ema = None
         
         self.query_csv, self.query_images_dir = self._load_dataset_index()
 
@@ -211,6 +217,8 @@ class PriorityMapRunner:
 
     def reset(self):
         self.index = 0
+        self._direction_ema = None
+        self._came_from_ema = None
 
     def should_run_sam(self, frame):
         return frame.frame_index % self.sam_step == 0
@@ -388,16 +396,15 @@ class PriorityMapRunner:
         if not self.debug or image is None:
             return image
 
-        arrows = [
-            (direction, (255, 255, 255)),
-            (came_from, (255, 0, 255)),
-        ]
-        arrows = [
+        main_arrows = [
             (vector, color)
-            for vector, color in arrows
+            for vector, color in [
+                (direction, (255, 255, 255)),
+                (came_from, (255, 0, 255)),
+            ]
             if vector is not None and np.linalg.norm(vector) > 0
         ]
-        if not arrows:
+        if not main_arrows:
             return image
 
         output = image.copy()
@@ -405,7 +412,7 @@ class PriorityMapRunner:
         center = (width // 2, height // 2)
         arrow_length = max(1, int(min(width, height) * 0.25))
         thickness = max(2, int(round(min(width, height) / 240)))
-        for vector, color in arrows:
+        for vector, color in main_arrows:
             endpoint = (
                 int(round(center[0] + vector[0] * arrow_length)),
                 int(round(center[1] - vector[1] * arrow_length)),
@@ -420,6 +427,74 @@ class PriorityMapRunner:
                 tipLength=0.25,
             )
         return output
+
+    def _smooth_vector(self, vector, state_attribute):
+        if vector is None:
+            setattr(self, state_attribute, None)
+            return None
+
+        current = np.asarray(vector, dtype=np.float32)
+        if current.shape != (2,) or not np.all(np.isfinite(current)):
+            raise ValueError("EMA vectors must contain two finite values.")
+
+        magnitude = np.linalg.norm(current)
+        if magnitude == 0:
+            ema = np.zeros(2, dtype=np.float32)
+        else:
+            current = current / magnitude
+            previous = getattr(self, state_attribute, None)
+            if previous is None:
+                ema = current
+            else:
+                alpha = self.vector_ema_alpha
+                ema = alpha * current + (1.0 - alpha) * previous
+
+        ema = np.asarray(ema, dtype=np.float32)
+        ema_magnitude = np.linalg.norm(ema)
+        if ema_magnitude <= np.finfo(np.float32).eps and magnitude > 0:
+            ema = current
+            ema_magnitude = np.linalg.norm(ema)
+
+        setattr(self, state_attribute, ema)
+        if ema_magnitude == 0:
+            return np.zeros(2, dtype=np.float32)
+        return np.asarray(ema / ema_magnitude, dtype=np.float32)
+
+    def _coverage_directions(self, frame, image):
+        has_gps = (
+            frame.easting is not None
+            and frame.northing is not None
+            and frame.altitude is not None
+        )
+        if has_gps:
+            current_position = np.array(
+                [frame.easting, frame.northing],
+                dtype=np.float32,
+            )
+        else:
+            height, width = image.shape[:2]
+            current_position = np.array(
+                [
+                    width / 2.0 + self.flow_localizer.cumulative_transform_dx,
+                    height / 2.0 + self.flow_localizer.cumulative_transform_dy,
+                ],
+                dtype=np.float32,
+            )
+
+        node_positions = self.graph_builder.get_nearby_node_positions(
+            current_position,
+            radius=200,
+            limit=10,
+        )
+        directions = []
+        for node_position in node_positions:
+            delta = np.asarray(node_position, dtype=np.float32) - current_position
+            if not has_gps:
+                delta[1] *= -1
+            distance = np.linalg.norm(delta)
+            if distance > 0:
+                directions.append(delta / distance)
+        return directions
     
     def close(self):
         if self._closed:
@@ -517,9 +592,12 @@ class PriorityMapRunner:
         sam3_seconds = segmentation_result.sam3_seconds
         if segmentations is None:
             segmentations = []
-        came_from = self.drone_motion.get_came_from(
-            frame,
-            segmentation_result.flow_transform,
+        came_from = self._smooth_vector(
+            self.drone_motion.get_came_from(
+                frame,
+                segmentation_result.flow_transform,
+            ),
+            "_came_from_ema",
         )
 
         segmentations = self._localize_segmentations(
@@ -563,7 +641,13 @@ class PriorityMapRunner:
             image,
             clustered,
         )
-        direction = self.direction.get_direction(numerical_heatmap, came_from)
+        direction = self._smooth_vector(
+            self.direction.get_direction(
+                numerical_heatmap,
+                came_from,
+            ),
+            "_direction_ema",
+        )
         if heatmap_text is not None and heatmap_only is not None:
             out = heatmap_text
             self.heatmap_video_output.handle_frame(

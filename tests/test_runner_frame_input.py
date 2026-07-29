@@ -21,6 +21,9 @@ class RunnerFrameInputTests(unittest.TestCase):
         runner.debug = False
         runner.direction = Direction()
         runner.drone_motion = DroneMotion()
+        runner.vector_ema_alpha = 0.3
+        runner._direction_ema = None
+        runner._came_from_ema = None
         return runner
 
     def test_runner_can_initialize_without_a_dataset(self):
@@ -106,6 +109,8 @@ class RunnerFrameInputTests(unittest.TestCase):
             dtype=np.float32,
         )
         runner.flow_localizer = MagicMock()
+        runner.flow_localizer.cumulative_transform_dx = 0.0
+        runner.flow_localizer.cumulative_transform_dy = 0.0
         runner.gps_localizer = MagicMock()
         runner.masks = set()
         runner.heatmap = MagicMock()
@@ -120,6 +125,9 @@ class RunnerFrameInputTests(unittest.TestCase):
         )
         runner.heatmap_video_output = MagicMock()
         runner.graph_builder = MagicMock()
+        runner.graph_builder.get_nearby_node_positions.return_value = [
+            (2.5, 1.5),
+        ]
         runner.last_graph_frame = None
         runner.graph_view = "spatial"
         runner.panoramic = False
@@ -144,12 +152,58 @@ class RunnerFrameInputTests(unittest.TestCase):
             np.array([1.0, 0.0], dtype=np.float32),
         )
         np.testing.assert_array_equal(result.came_from, came_from)
-        runner.direction.get_direction.assert_called_once_with(
-            numerical_heatmap,
-            came_from,
-        )
+        direction_args = runner.direction.get_direction.call_args.args
+        self.assertIs(direction_args[0], numerical_heatmap)
+        np.testing.assert_array_equal(direction_args[1], came_from)
+        self.assertEqual(len(direction_args), 2)
         self.assertEqual(result.numerical_heatmap.shape, image.shape[:2])
         self.assertEqual(runner.frames_processed, 8)
+
+    def test_coverage_directions_use_gps_coordinates(self):
+        runner = self.bare_runner()
+        runner.graph_builder = MagicMock()
+        runner.graph_builder.get_nearby_node_positions.return_value = [
+            (20.0, 20.0),
+            (10.0, 30.0),
+        ]
+        frame = SimpleNamespace(
+            easting=10.0,
+            northing=20.0,
+            altitude=100.0,
+        )
+
+        directions = runner._coverage_directions(
+            frame,
+            np.zeros((80, 100, 3), dtype=np.uint8),
+        )
+
+        np.testing.assert_allclose(directions[0], [1.0, 0.0])
+        np.testing.assert_allclose(directions[1], [0.0, 1.0])
+
+    def test_coverage_directions_flip_flow_image_y(self):
+        runner = self.bare_runner()
+        runner.flow_localizer = SimpleNamespace(
+            cumulative_transform_dx=5.0,
+            cumulative_transform_dy=-3.0,
+        )
+        runner.graph_builder = MagicMock()
+        runner.graph_builder.get_nearby_node_positions.return_value = [
+            (65.0, 37.0),
+            (55.0, 47.0),
+        ]
+        frame = SimpleNamespace(
+            easting=None,
+            northing=None,
+            altitude=None,
+        )
+
+        directions = runner._coverage_directions(
+            frame,
+            np.zeros((80, 100, 3), dtype=np.uint8),
+        )
+
+        np.testing.assert_allclose(directions[0], [1.0, 0.0])
+        np.testing.assert_allclose(directions[1], [0.0, -1.0])
 
     def test_debug_mode_draws_direction_and_came_from_arrows(self):
         runner = self.bare_runner()
@@ -196,6 +250,91 @@ class RunnerFrameInputTests(unittest.TestCase):
             )
 
         arrowed_line.assert_called_once()
+
+    def test_ema_smooths_direction_and_came_from_independently(self):
+        runner = self.bare_runner()
+        runner.vector_ema_alpha = 0.25
+
+        first_direction = runner._smooth_vector(
+            np.array([1.0, 0.0], dtype=np.float32),
+            "_direction_ema",
+        )
+        first_came_from = runner._smooth_vector(
+            np.array([-1.0, 0.0], dtype=np.float32),
+            "_came_from_ema",
+        )
+        second_direction = runner._smooth_vector(
+            np.array([0.0, 1.0], dtype=np.float32),
+            "_direction_ema",
+        )
+        second_came_from = runner._smooth_vector(
+            np.array([0.0, -1.0], dtype=np.float32),
+            "_came_from_ema",
+        )
+
+        np.testing.assert_allclose(first_direction, [1.0, 0.0])
+        np.testing.assert_allclose(first_came_from, [-1.0, 0.0])
+        np.testing.assert_allclose(
+            second_direction,
+            np.array([0.75, 0.25]) / np.linalg.norm([0.75, 0.25]),
+        )
+        np.testing.assert_allclose(
+            second_came_from,
+            np.array([-0.75, -0.25]) / np.linalg.norm([-0.75, -0.25]),
+        )
+
+    def test_ema_zero_vector_clears_stale_direction(self):
+        runner = self.bare_runner()
+        runner._smooth_vector(
+            np.array([1.0, 0.0], dtype=np.float32),
+            "_direction_ema",
+        )
+
+        zero = runner._smooth_vector(
+            np.zeros(2, dtype=np.float32),
+            "_direction_ema",
+        )
+        after_zero = runner._smooth_vector(
+            np.array([0.0, 1.0], dtype=np.float32),
+            "_direction_ema",
+        )
+
+        np.testing.assert_array_equal(zero, np.zeros(2, dtype=np.float32))
+        np.testing.assert_allclose(after_zero, [0.0, 1.0])
+
+    def test_ema_eventually_tracks_a_reversed_vector(self):
+        runner = self.bare_runner()
+        runner.vector_ema_alpha = 0.3
+        runner._smooth_vector(
+            np.array([1.0, 0.0], dtype=np.float32),
+            "_direction_ema",
+        )
+
+        runner._smooth_vector(
+            np.array([-1.0, 0.0], dtype=np.float32),
+            "_direction_ema",
+        )
+        reversed_direction = runner._smooth_vector(
+            np.array([-1.0, 0.0], dtype=np.float32),
+            "_direction_ema",
+        )
+
+        np.testing.assert_allclose(reversed_direction, [-1.0, 0.0])
+
+    def test_ema_cancellation_uses_the_current_direction(self):
+        runner = self.bare_runner()
+        runner.vector_ema_alpha = 0.5
+        runner._smooth_vector(
+            np.array([1.0, 0.0], dtype=np.float32),
+            "_direction_ema",
+        )
+
+        reversed_direction = runner._smooth_vector(
+            np.array([-1.0, 0.0], dtype=np.float32),
+            "_direction_ema",
+        )
+
+        np.testing.assert_allclose(reversed_direction, [-1.0, 0.0])
 
 
 if __name__ == "__main__":

@@ -25,6 +25,7 @@ def run_priority_map(
     gps_csv: str | Path | None = None,
     camera_intrinsics: str | Path | None = None,
     scene_model: str | None = None,
+    vector_ema_alpha: float = config.VECTOR_EMA_ALPHA,
 ) -> PriorityMapResult:
     runner = PriorityMapRunner(
         image_folder=image_folder,
@@ -44,6 +45,7 @@ def run_priority_map(
         gps_csv=gps_csv,
         camera_intrinsics=camera_intrinsics,
         scene_model=scene_model,
+        vector_ema_alpha=vector_ema_alpha,
     )
 
     try:

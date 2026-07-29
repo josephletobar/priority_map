@@ -48,7 +48,8 @@ Each `PriorityFrameResult` includes:
 - `heatmap_only`: the JET-colored version used for display.
 - `direction`: a two-element unit vector pointing from the image center toward
   the strongest heatmap region. Regions are ranked by total heat, so both their
-  size and intensity matter.
+  size and intensity matter. Before selecting a region, directions toward
+  `came_from` and up to 10 nearby graph nodes are masked from the search.
 - `came_from`: a two-element unit vector pointing back toward the previous
   drone position. It uses consecutive GPS poses when available and otherwise
   falls back to optical flow.

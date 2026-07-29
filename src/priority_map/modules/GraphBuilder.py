@@ -192,6 +192,41 @@ class GraphBuilder:
             return row[0], row[1]
         return None, None
 
+    def get_nearby_node_positions(
+        self,
+        current_position,
+        radius=200,
+        limit=10,
+    ):
+        current_x, current_y = map(float, current_position)
+        radius = float(radius)
+        limit = int(limit)
+        if radius <= 0 or limit <= 0:
+            return []
+
+        self.cursor.execute(
+            '''
+            SELECT geo_pos_x, geo_pos_y
+            FROM nodes
+            WHERE geo_pos_x BETWEEN ? AND ?
+              AND geo_pos_y BETWEEN ? AND ?
+            ''',
+            (
+                current_x - radius,
+                current_x + radius,
+                current_y - radius,
+                current_y + radius,
+            ),
+        )
+        nearby = []
+        for node_x, node_y in self.cursor.fetchall():
+            distance = float(np.hypot(node_x - current_x, node_y - current_y))
+            if distance <= radius:
+                nearby.append((distance, (float(node_x), float(node_y))))
+
+        nearby.sort(key=lambda item: item[0])
+        return [position for _, position in nearby[:limit]]
+
     def _next_node_id(self, base_label):
         """Get next unique node_id for label by querying max from DB"""
         self.cursor.execute('''
