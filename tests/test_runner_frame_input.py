@@ -7,6 +7,8 @@ from unittest.mock import MagicMock, patch
 import cv2
 import numpy as np
 
+from priority_map.modules.Direction import Direction
+from priority_map.modules.drone_motion import DroneMotion
 from priority_map.runner import PriorityMapRunner
 
 
@@ -17,6 +19,8 @@ class RunnerFrameInputTests(unittest.TestCase):
         runner.frames_processed = 7
         runner.gps_csv_path = None
         runner.debug = False
+        runner.direction = Direction()
+        runner.drone_motion = DroneMotion()
         return runner
 
     def test_runner_can_initialize_without_a_dataset(self):
@@ -93,6 +97,14 @@ class RunnerFrameInputTests(unittest.TestCase):
             sam3_seconds=0.0,
             flow_transform=None,
         )
+        came_from = np.array([-1.0, 0.0], dtype=np.float32)
+        runner.drone_motion = MagicMock()
+        runner.drone_motion.get_came_from.return_value = came_from
+        runner.direction = MagicMock()
+        runner.direction.get_direction.return_value = np.array(
+            [1.0, 0.0],
+            dtype=np.float32,
+        )
         runner.flow_localizer = MagicMock()
         runner.gps_localizer = MagicMock()
         runner.masks = set()
@@ -131,26 +143,59 @@ class RunnerFrameInputTests(unittest.TestCase):
             result.direction,
             np.array([1.0, 0.0], dtype=np.float32),
         )
+        np.testing.assert_array_equal(result.came_from, came_from)
+        runner.direction.get_direction.assert_called_once_with(
+            numerical_heatmap,
+            came_from,
+        )
         self.assertEqual(result.numerical_heatmap.shape, image.shape[:2])
         self.assertEqual(runner.frames_processed, 8)
 
-    def test_direction_arrow_is_drawn_only_in_debug_mode(self):
+    def test_debug_mode_draws_direction_and_came_from_arrows(self):
         runner = self.bare_runner()
         image = np.zeros((80, 100, 3), dtype=np.uint8)
         direction = np.array([0.0, 1.0], dtype=np.float32)
+        came_from = np.array([-1.0, 0.0], dtype=np.float32)
 
         with patch("priority_map.runner.cv2.arrowedLine") as arrowed_line:
-            unchanged = runner._draw_debug_direction(image, direction)
+            unchanged = runner._draw_debug_directions(
+                image,
+                direction,
+                came_from,
+            )
             arrowed_line.assert_not_called()
 
             runner.debug = True
-            output = runner._draw_debug_direction(image, direction)
+            output = runner._draw_debug_directions(
+                image,
+                direction,
+                came_from,
+            )
 
         self.assertIs(unchanged, image)
         self.assertIsNot(output, image)
+        self.assertEqual(arrowed_line.call_count, 2)
+        direction_call, came_from_call = arrowed_line.call_args_list
+        self.assertEqual(direction_call.args[1], (50, 40))
+        self.assertEqual(direction_call.args[2], (50, 20))
+        self.assertEqual(direction_call.args[3], (255, 255, 255))
+        self.assertEqual(came_from_call.args[1], (50, 40))
+        self.assertEqual(came_from_call.args[2], (30, 40))
+        self.assertEqual(came_from_call.args[3], (255, 0, 255))
+
+    def test_debug_arrows_skip_zero_vectors(self):
+        runner = self.bare_runner()
+        runner.debug = True
+        image = np.zeros((80, 100, 3), dtype=np.uint8)
+
+        with patch("priority_map.runner.cv2.arrowedLine") as arrowed_line:
+            runner._draw_debug_directions(
+                image,
+                np.array([1.0, 0.0], dtype=np.float32),
+                np.zeros(2, dtype=np.float32),
+            )
+
         arrowed_line.assert_called_once()
-        self.assertEqual(arrowed_line.call_args.args[1], (50, 40))
-        self.assertEqual(arrowed_line.call_args.args[2], (50, 20))
 
 
 if __name__ == "__main__":

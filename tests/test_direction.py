@@ -3,11 +3,14 @@ from types import SimpleNamespace
 
 import numpy as np
 
-from priority_map.modules.Direction import get_direction
+from priority_map.modules.Direction import Direction
 from priority_map.modules.Heatmap import Heatmap
 
 
 class DirectionTests(unittest.TestCase):
+    def setUp(self):
+        self.direction = Direction()
+
     def heatmap_with_target(self, x, y, heat=80.0):
         numerical_heatmap = np.zeros((101, 101), dtype=np.float32)
         numerical_heatmap[y, x] = heat
@@ -24,12 +27,14 @@ class DirectionTests(unittest.TestCase):
         for (x, y), expected in cases:
             with self.subTest(target=(x, y)):
                 np.testing.assert_allclose(
-                    get_direction(self.heatmap_with_target(x, y)),
+                    self.direction.get_direction(self.heatmap_with_target(x, y)),
                     expected,
                 )
 
     def test_normalizes_diagonal_vector(self):
-        direction = get_direction(self.heatmap_with_target(80, 20))
+        direction = self.direction.get_direction(
+            self.heatmap_with_target(80, 20)
+        )
 
         np.testing.assert_allclose(
             direction,
@@ -42,17 +47,29 @@ class DirectionTests(unittest.TestCase):
         empty = np.zeros((101, 101), dtype=np.float32)
 
         np.testing.assert_array_equal(
-            get_direction(centered),
+            self.direction.get_direction(centered),
             np.zeros(2, dtype=np.float32),
         )
         np.testing.assert_array_equal(
-            get_direction(empty),
+            self.direction.get_direction(empty),
             np.zeros(2, dtype=np.float32),
         )
 
     def test_requires_a_two_dimensional_numerical_heatmap(self):
         with self.assertRaisesRegex(ValueError, "two-dimensional"):
-            get_direction(np.zeros((10, 10, 3), dtype=np.uint8))
+            self.direction.get_direction(
+                np.zeros((10, 10, 3), dtype=np.uint8)
+            )
+
+    def test_large_hot_region_beats_a_hotter_single_pixel(self):
+        numerical_heatmap = np.zeros((101, 101), dtype=np.float32)
+        numerical_heatmap[50, 80] = 100
+        numerical_heatmap[45:56, 10:21] = 5
+
+        np.testing.assert_allclose(
+            self.direction.get_direction(numerical_heatmap),
+            np.array([-1.0, 0.0], dtype=np.float32),
+        )
 
 
 class NumericalHeatmapTests(unittest.TestCase):
@@ -80,7 +97,7 @@ class NumericalHeatmapTests(unittest.TestCase):
         self.assertEqual(heatmap_only.shape, image.shape)
         self.assertEqual(heatmap_text.shape, image.shape)
         np.testing.assert_allclose(
-            get_direction(numerical_heatmap),
+            Direction().get_direction(numerical_heatmap),
             np.array([1.0, 0.0], dtype=np.float32),
         )
 

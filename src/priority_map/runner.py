@@ -22,9 +22,10 @@ from priority_map.scripts.cluster_segmentations import cluster_segmentations
 
 from priority_map.modules.SceneUnderstanding import SceneUnderstanding
 from priority_map.modules.Heatmap import Heatmap
-from priority_map.modules.Direction import get_direction
+from priority_map.modules.Direction import Direction
 from priority_map.modules.Segment import Segment
 from priority_map.modules.GraphBuilder import GraphBuilder
+from priority_map.modules.drone_motion import DroneMotion
 from priority_map.modules.object_localizing.localizer import LocalizationContext
 from priority_map.modules.object_localizing.flow_localizer import FlowLocalizer
 from priority_map.modules.object_localizing.gps_localizer import GpsLocalizer
@@ -69,6 +70,7 @@ class PriorityFrameResult:
     heatmap_only: np.ndarray | None
     numerical_heatmap: np.ndarray | None
     direction: np.ndarray | None
+    came_from: np.ndarray | None
     output_frame: np.ndarray | None
     latency_seconds: dict[str, float]
     keep_running: bool
@@ -146,6 +148,8 @@ class PriorityMapRunner:
         self.graph_builder = GraphBuilder(output_dir=self.output_dir, debug=debug)
         self.graph_builder.set_original_task(task)
         self.heatmap = Heatmap(blur_spread=blur_spread, dilation_scale=dilation_scale)
+        self.direction = Direction()
+        self.drone_motion = DroneMotion()
         self.flow_localizer = FlowLocalizer()
         self.gps_localizer = GpsLocalizer()
         self.masks = {m.lower() for m in self.masks}
@@ -380,27 +384,41 @@ class PriorityMapRunner:
 
         return segmentations
 
-    def _draw_debug_direction(self, image, direction):
-        if not self.debug or image is None or np.linalg.norm(direction) == 0:
+    def _draw_debug_directions(self, image, direction, came_from):
+        if not self.debug or image is None:
+            return image
+
+        arrows = [
+            (direction, (255, 255, 255)),
+            (came_from, (255, 0, 255)),
+        ]
+        arrows = [
+            (vector, color)
+            for vector, color in arrows
+            if vector is not None and np.linalg.norm(vector) > 0
+        ]
+        if not arrows:
             return image
 
         output = image.copy()
         height, width = output.shape[:2]
         center = (width // 2, height // 2)
         arrow_length = max(1, int(min(width, height) * 0.25))
-        endpoint = (
-            int(round(center[0] + direction[0] * arrow_length)),
-            int(round(center[1] - direction[1] * arrow_length)),
-        )
-        cv2.arrowedLine(
-            output,
-            center,
-            endpoint,
-            (255, 255, 255),
-            max(2, int(round(min(width, height) / 240))),
-            cv2.LINE_AA,
-            tipLength=0.25,
-        )
+        thickness = max(2, int(round(min(width, height) / 240)))
+        for vector, color in arrows:
+            endpoint = (
+                int(round(center[0] + vector[0] * arrow_length)),
+                int(round(center[1] - vector[1] * arrow_length)),
+            )
+            cv2.arrowedLine(
+                output,
+                center,
+                endpoint,
+                color,
+                thickness,
+                cv2.LINE_AA,
+                tipLength=0.25,
+            )
         return output
     
     def close(self):
@@ -453,6 +471,7 @@ class PriorityMapRunner:
                 heatmap_only=None,
                 numerical_heatmap=None,
                 direction=None,
+                came_from=None,
                 output_frame=None,
                 latency_seconds={
                     "total": total_seconds,
@@ -498,6 +517,10 @@ class PriorityMapRunner:
         sam3_seconds = segmentation_result.sam3_seconds
         if segmentations is None:
             segmentations = []
+        came_from = self.drone_motion.get_came_from(
+            frame,
+            segmentation_result.flow_transform,
+        )
 
         segmentations = self._localize_segmentations(
             segmentations,
@@ -540,14 +563,14 @@ class PriorityMapRunner:
             image,
             clustered,
         )
-        direction = get_direction(numerical_heatmap)
+        direction = self.direction.get_direction(numerical_heatmap, came_from)
         if heatmap_text is not None and heatmap_only is not None:
             out = heatmap_text
             self.heatmap_video_output.handle_frame(
                 heatmap_text,
                 header=f"Task: {self.task}",
             )
-        out = self._draw_debug_direction(out, direction)
+        out = self._draw_debug_directions(out, direction, came_from)
 
         # Save Heatmap Individual Heatmap Images
         safe_imwrite(str(heatmap_images_dir / frame.image_name), heatmap_only)
@@ -635,6 +658,7 @@ class PriorityMapRunner:
             heatmap_only=heatmap_only,
             numerical_heatmap=numerical_heatmap,
             direction=direction,
+            came_from=came_from,
             output_frame=out,
             latency_seconds={
                 "total": total_seconds,

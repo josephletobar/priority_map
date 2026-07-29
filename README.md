@@ -47,10 +47,14 @@ Each `PriorityFrameResult` includes:
   blur, before colorization.
 - `heatmap_only`: the JET-colored version used for display.
 - `direction`: a two-element unit vector pointing from the image center toward
-  the hottest numerical heatmap pixel.
+  the strongest heatmap region. Regions are ranked by total heat, so both their
+  size and intensity matter.
+- `came_from`: a two-element unit vector pointing back toward the previous
+  drone position. It uses consecutive GPS poses when available and otherwise
+  falls back to optical flow.
 
 Direction vectors use navigation coordinates: positive X points right and
-positive Y points up/forward. An empty heatmap or centered hottest pixel returns
+positive Y points up/forward. An empty heatmap or centered target region returns
 `[0.0, 0.0]`. This is a visual navigation suggestion, not a flight-control
 command.
 
@@ -109,13 +113,16 @@ priority-map --img-folder D:\Train\Train\query_images --scene-model gpt-5.4 --ta
 ## Notes
 
 Use `--output-dir` to choose an output folder. If omitted, outputs are written under `examples/YYYY-MM-DD_HH-MM-SS`. The CLI saves `video.avi` and `heatmap.avi` by default; use `--debug` to display frames with OpenCV and print debug logs.
-Debug output also draws the computed direction vector as an arrow from the
-center of the scene.
+Debug output draws both vectors from the scene center: the heatmap direction
+in white and `came_from` in magenta.
 
 Use `--debrief "extra task context"` to add optional context to the task prompt.
 Input images are resized to a 640px longest edge by default; use `--max-image-edge 0` to disable resizing.
 
-If `--gps` is provided, frame metadata is matched by the CSV `name` column. Without GPS, the runner uses flow-based localization.
+If `--gps` is provided, frame metadata is matched by the CSV `name` column.
+GPS is preferred for both object localization and the `came_from` vector;
+motion falls back to optical flow until a valid consecutive GPS delta and
+orientation are available.
 
 Scene understanding defaults to Gemma through OpenRouter. Use `--scene-model gpt-5.4` for OpenAI, `--scene-model gemma` for the default Gemma model, or set `SCENE_UNDERSTANDING_MODEL` in the environment.
 
