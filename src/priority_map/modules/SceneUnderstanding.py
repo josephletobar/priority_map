@@ -15,7 +15,7 @@ from priority_map.config.prompts import GPT_VISION_PROMPT
 
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 DEFAULT_GEMMA_MODEL = "google/gemma-4-31b-it"
-DEFAULT_OPENAI_MODEL = "gpt-5.4"
+DEFAULT_OPENAI_MODEL = "gpt-5.6-luna"
 
 
 @dataclass
@@ -30,6 +30,8 @@ class SceneUnderstanding:
         self.model = self._resolve_model(model)
         self.provider = self._provider_for_model(self.model)
         self.client = self._create_client(api_key=api_key, base_url=base_url)
+        self.reasoning_effort = os.getenv("SCENE_REASONING_EFFORT", "none")
+        self.image_detail = os.getenv("SCENE_IMAGE_DETAIL", "low")
         self.debug = debug
         self.vocabulary = {}
         self.vocabulary_alpha = 0.90
@@ -83,7 +85,6 @@ class SceneUnderstanding:
                 self.vocabulary[label] = score
 
             updated_dict[label] = {
-                "reasoning": label_info["reasoning"],
                 "score": self.vocabulary[label]
             }
 
@@ -155,18 +156,16 @@ class SceneUnderstanding:
         for key, label_info in scene_dict.items():
             if not isinstance(label_info, dict):
                 raise ValueError(f"Expected label info object for {key!r}")
-            if "reasoning" not in label_info or "score" not in label_info:
-                raise ValueError(f"Scene label {key!r} must include reasoning and score")
+            if "score" not in label_info:
+                raise ValueError(f"Scene label {key!r} must include score")
 
             label = str(key).strip()
-            reasoning = str(label_info["reasoning"]).strip()
             score = float(label_info["score"])
 
-            if not label or not reasoning:
-                raise ValueError(f"Scene label {key!r} must have a non-empty label and reasoning")
+            if not label:
+                raise ValueError(f"Scene label {key!r} must have a non-empty label")
 
             normalized[label] = {
-                "reasoning": reasoning,
                 "score": score,
             }
 
@@ -225,7 +224,7 @@ class SceneUnderstanding:
         )
 
         start = time.perf_counter()
-        response = self.client.responses.create(
+        request_options = dict(
             model=self.model,
             input=[{
                 "role": "user",
@@ -234,11 +233,17 @@ class SceneUnderstanding:
                     {
                         "type": "input_image",
                         "image_url": f"data:image/jpeg;base64,{image_b64}",
-                        "detail": "high"
+                        "detail": self.image_detail,
                     },
                 ],
             }],
+            max_output_tokens=1200,
         )
+        if self.provider == "openai":
+            request_options["reasoning"] = {"effort": self.reasoning_effort}
+            request_options["text"] = {"verbosity": "low"}
+
+        response = self.client.responses.create(**request_options)
         end = time.perf_counter()
         self._debug_print(
             f"\nVLM inference time: {end - start:.2f} seconds "
@@ -278,27 +283,22 @@ class SceneUnderstanding:
 def debug():
     return SceneUnderstandingResult(labels={
         "trees": {
-            "reasoning": "Chosen as a major scene category, but scored at zero because trees are not useful for the example car-search task compared with roads or vehicles.",
             "score": 0,
         },
 
         "field": {
-            "reasoning": "Chosen because fields are broad searchable terrain, but scored low because they are weak context for cars relative to roads, buildings, and vehicles.",
             "score": 30,
         },
 
         "road": {
-            "reasoning": "Chosen because roads are strong car-search context and likely access paths, so they receive a high relevance score.",
             "score": 90,
         },
 
         "building": {
-            "reasoning": "Chosen because buildings indicate human activity and possible nearby parking or access, giving them moderate relevance for a car-search task.",
             "score": 55,
         },
 
         "vehicle": {
-            "reasoning": "Chosen because vehicles directly match the example car-search objective, so they receive the highest relevance score.",
             "score": 100,
         },
     }, edge_intents=[])

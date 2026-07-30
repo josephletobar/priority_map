@@ -202,6 +202,11 @@ class Segment():
                 t0 = time.perf_counter()
                 if getattr(self.predictor, "model", None) is None:
                     self.predictor.setup_model(verbose=self.debug)
+                # Ultralytics SAM3SemanticPredictor currently expects every SAM
+                # model to expose this threshold, but SAM3SemanticModel does not
+                # define it. SAM mask logits use zero as the standard cutoff.
+                if not hasattr(self.predictor.model, "mask_threshold"):
+                    self.predictor.model.mask_threshold = 0.0
                 results = self.predictor(sam_image, text=prompts)
                 sam3_seconds = time.perf_counter() - t0
                 if results:

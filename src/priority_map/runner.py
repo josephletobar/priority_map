@@ -112,6 +112,7 @@ class PriorityMapRunner:
         camera_intrinsics: str | Path | None = None,
         scene_model: str | None = None,
         vector_ema_alpha: float = config.VECTOR_EMA_ALPHA,
+        persist_artifacts: bool = True,
     ):
         self.dataset_root = Path(image_folder) if image_folder is not None else DEFAULT_IMAGE_FOLDER
         self.gps_csv_path = Path(gps_csv) if gps_csv is not None else None
@@ -128,6 +129,7 @@ class PriorityMapRunner:
         self.sam_model_path = sam_model_path
         self.panoramic = panoramic
         self.debug = debug
+        self.persist_artifacts = persist_artifacts
         if not 0 < vector_ema_alpha <= 1:
             raise ValueError("vector_ema_alpha must be greater than 0 and at most 1.")
         self.vector_ema_alpha = vector_ema_alpha
@@ -609,27 +611,29 @@ class PriorityMapRunner:
 
         clustered = cluster_segmentations(segmentations)
 
-        # Set Where to Save Observations CSV
-        csv_path = self.observations_csv
-        if not csv_path.exists():
-            with csv_path.open("w", newline="") as f:
+        heatmap_images_dir = None
+        if self.persist_artifacts:
+            # Set Where to Save Observations CSV
+            csv_path = self.observations_csv
+            if not csv_path.exists():
+                with csv_path.open("w", newline="") as f:
+                    writer = csv.writer(f)
+                    writer.writerow(["image_name", "label", "centroid_x", "centroid_y"])
+
+            # Save Clustered Observations to CSV
+            with csv_path.open("a", newline="") as f:
                 writer = csv.writer(f)
-                writer.writerow(["image_name", "label", "centroid_x", "centroid_y"])
+                for cluster in clustered:
+                    cx, cy = cluster.centroid
+                    writer.writerow([
+                        frame.image_name,
+                        cluster.label,
+                        cx,
+                        cy,
+                    ])
 
-        # Save Clustered Observations to CSV
-        with csv_path.open("a", newline="") as f:
-            writer = csv.writer(f)
-            for cluster in clustered:
-                cx, cy = cluster.centroid
-                writer.writerow([
-                    frame.image_name,
-                    cluster.label,
-                    cx,
-                    cy,
-                ])
-
-        heatmap_images_dir = self.output_dir / "heatmap_imgs"
-        heatmap_images_dir.mkdir(parents=True, exist_ok=True)
+            heatmap_images_dir = self.output_dir / "heatmap_imgs"
+            heatmap_images_dir.mkdir(parents=True, exist_ok=True)
 
         # Set Segmentation Types to Display MASKS
         mask_frame = None
@@ -657,7 +661,8 @@ class PriorityMapRunner:
         out = self._draw_debug_directions(out, direction, came_from)
 
         # Save Heatmap Individual Heatmap Images
-        safe_imwrite(str(heatmap_images_dir / frame.image_name), heatmap_only)
+        if self.persist_artifacts:
+            safe_imwrite(str(heatmap_images_dir / frame.image_name), heatmap_only)
 
         if scene_dict is not None:
             add_result = self.graph_builder.add_nodes(clustered)
@@ -666,29 +671,31 @@ class PriorityMapRunner:
                 add_result,
                 recent_graph_context,
             )
-            graph_frame = self.graph_builder.render_2d_graph_frame(view=self.graph_view)
-            if graph_frame is not None:
-                self.last_graph_frame = graph_frame
+            if self.persist_artifacts or self.debug:
+                graph_frame = self.graph_builder.render_2d_graph_frame(view=self.graph_view)
+                if graph_frame is not None:
+                    self.last_graph_frame = graph_frame
 
         else:
             self.graph_builder.assign_existing_node_ids(clustered)
 
-        # Save the DB node ID matched to each clustered mask for every frame.
-        assigned_node_ids = [
-            cluster.node_id
-            for cluster in clustered
-            if getattr(cluster, "node_id", None)
-        ]
-        max_node_id_length = max(map(len, assigned_node_ids), default=1)
-        node_ids = np.full(image.shape[:2], "", dtype=f"<U{max_node_id_length}")
-        for cluster in sorted(clustered, key=lambda cluster: cluster.score, reverse=True):
-            node_id = getattr(cluster, "node_id", None)
-            if not node_id:
-                continue
-            mask = cluster.mask.astype(bool)
-            node_ids[mask & (node_ids == "")] = node_id
-        node_ids_path = heatmap_images_dir / f"{Path(frame.image_name).stem}.nodes.npz"
-        np.savez_compressed(node_ids_path, node_ids=node_ids)
+        if self.persist_artifacts:
+            # Save the DB node ID matched to each clustered mask for every frame.
+            assigned_node_ids = [
+                cluster.node_id
+                for cluster in clustered
+                if getattr(cluster, "node_id", None)
+            ]
+            max_node_id_length = max(map(len, assigned_node_ids), default=1)
+            node_ids = np.full(image.shape[:2], "", dtype=f"<U{max_node_id_length}")
+            for cluster in sorted(clustered, key=lambda cluster: cluster.score, reverse=True):
+                node_id = getattr(cluster, "node_id", None)
+                if not node_id:
+                    continue
+                mask = cluster.mask.astype(bool)
+                node_ids[mask & (node_ids == "")] = node_id
+            node_ids_path = heatmap_images_dir / f"{Path(frame.image_name).stem}.nodes.npz"
+            np.savez_compressed(node_ids_path, node_ids=node_ids)
 
         if self.last_graph_frame is not None and out is not None:
             heatmap_height = out.shape[0]
