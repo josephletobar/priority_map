@@ -22,6 +22,8 @@ class RunnerFrameInputTests(unittest.TestCase):
         runner.direction = Direction()
         runner.drone_motion = DroneMotion()
         runner.vector_ema_alpha = 0.3
+        runner.max_direction_turn_degrees = 12.0
+        runner.persist_artifacts = False
         runner._direction_ema = None
         runner._came_from_ema = None
         return runner
@@ -335,6 +337,28 @@ class RunnerFrameInputTests(unittest.TestCase):
         )
 
         np.testing.assert_allclose(reversed_direction, [-1.0, 0.0])
+
+    def test_direction_turn_can_be_hard_limited(self):
+        runner = self.bare_runner()
+        runner.vector_ema_alpha = 1.0
+        runner._smooth_vector(
+            np.array([1.0, 0.0], dtype=np.float32),
+            "_direction_ema",
+            max_turn_degrees=12.0,
+        )
+
+        limited = runner._smooth_vector(
+            np.array([0.0, 1.0], dtype=np.float32),
+            "_direction_ema",
+            max_turn_degrees=12.0,
+        )
+
+        expected_radians = np.deg2rad(12.0)
+        np.testing.assert_allclose(
+            limited,
+            [np.cos(expected_radians), np.sin(expected_radians)],
+            atol=1e-6,
+        )
 
 
 if __name__ == "__main__":

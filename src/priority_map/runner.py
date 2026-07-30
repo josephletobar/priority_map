@@ -112,6 +112,7 @@ class PriorityMapRunner:
         camera_intrinsics: str | Path | None = None,
         scene_model: str | None = None,
         vector_ema_alpha: float = config.VECTOR_EMA_ALPHA,
+        max_direction_turn_degrees: float = config.MAX_DIRECTION_TURN_DEGREES,
         persist_artifacts: bool = True,
     ):
         self.dataset_root = Path(image_folder) if image_folder is not None else DEFAULT_IMAGE_FOLDER
@@ -132,7 +133,13 @@ class PriorityMapRunner:
         self.persist_artifacts = persist_artifacts
         if not 0 < vector_ema_alpha <= 1:
             raise ValueError("vector_ema_alpha must be greater than 0 and at most 1.")
+        if not 0 < max_direction_turn_degrees <= 180:
+            raise ValueError(
+                "max_direction_turn_degrees must be greater than 0 "
+                "and at most 180."
+            )
         self.vector_ema_alpha = vector_ema_alpha
+        self.max_direction_turn_degrees = max_direction_turn_degrees
         self._direction_ema = None
         self._came_from_ema = None
         
@@ -430,7 +437,12 @@ class PriorityMapRunner:
             )
         return output
 
-    def _smooth_vector(self, vector, state_attribute):
+    def _smooth_vector(
+        self,
+        vector,
+        state_attribute,
+        max_turn_degrees=None,
+    ):
         if vector is None:
             setattr(self, state_attribute, None)
             return None
@@ -457,10 +469,54 @@ class PriorityMapRunner:
             ema = current
             ema_magnitude = np.linalg.norm(ema)
 
+        previous = getattr(self, state_attribute, None)
+        if (
+            max_turn_degrees is not None
+            and previous is not None
+            and ema_magnitude > 0
+        ):
+            ema = self._limit_vector_turn(
+                previous,
+                ema,
+                max_turn_degrees,
+            )
+            ema_magnitude = np.linalg.norm(ema)
+
         setattr(self, state_attribute, ema)
         if ema_magnitude == 0:
             return np.zeros(2, dtype=np.float32)
         return np.asarray(ema / ema_magnitude, dtype=np.float32)
+
+    def _limit_vector_turn(self, previous, candidate, max_turn_degrees):
+        previous = np.asarray(previous, dtype=np.float32)
+        candidate = np.asarray(candidate, dtype=np.float32)
+        previous_magnitude = np.linalg.norm(previous)
+        candidate_magnitude = np.linalg.norm(candidate)
+        if previous_magnitude == 0 or candidate_magnitude == 0:
+            return candidate
+
+        previous = previous / previous_magnitude
+        candidate = candidate / candidate_magnitude
+        dot = float(np.clip(np.dot(previous, candidate), -1.0, 1.0))
+        cross = float(
+            previous[0] * candidate[1] -
+            previous[1] * candidate[0]
+        )
+        signed_angle = float(np.arctan2(cross, dot))
+        maximum_angle = float(np.deg2rad(max_turn_degrees))
+        if abs(signed_angle) <= maximum_angle:
+            return candidate
+
+        limited_angle = np.copysign(maximum_angle, signed_angle)
+        cosine = np.cos(limited_angle)
+        sine = np.sin(limited_angle)
+        return np.array(
+            [
+                previous[0] * cosine - previous[1] * sine,
+                previous[0] * sine + previous[1] * cosine,
+            ],
+            dtype=np.float32,
+        )
 
     def _coverage_directions(self, frame, image):
         has_gps = (
@@ -651,6 +707,7 @@ class PriorityMapRunner:
                 came_from,
             ),
             "_direction_ema",
+            max_turn_degrees=self.max_direction_turn_degrees,
         )
         if heatmap_text is not None and heatmap_only is not None:
             out = heatmap_text
