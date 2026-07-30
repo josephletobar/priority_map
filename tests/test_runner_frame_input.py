@@ -9,6 +9,7 @@ import numpy as np
 
 from priority_map.modules.Direction import Direction, DirectionDecision
 from priority_map.modules.drone_motion import DroneMotion
+from priority_map.modules.geospatial import CesiumFrameMetadata
 from priority_map.runner import PriorityMapRunner
 
 
@@ -130,7 +131,7 @@ class RunnerFrameInputTests(unittest.TestCase):
         )
         runner.heatmap_video_output = MagicMock()
         runner.graph_builder = MagicMock()
-        runner.graph_builder.get_nearby_node_positions.return_value = [
+        runner.graph_builder.get_recent_node_positions.return_value = [
             (2.5, 1.5),
         ]
         runner.last_graph_frame = None
@@ -164,73 +165,35 @@ class RunnerFrameInputTests(unittest.TestCase):
             direction_call.kwargs["came_from"],
             came_from,
         )
-        self.assertEqual(
-            direction_call.kwargs["coverage_directions"],
-            [],
+        self.assertIsNone(
+            direction_call.kwargs["forbidden_directions"],
         )
         self.assertEqual(result.numerical_heatmap.shape, image.shape[:2])
         self.assertEqual(runner.frames_processed, 8)
+        self.assertFalse(result.goal_found)
 
-    def test_coverage_directions_skip_gps_until_projection_is_supported(self):
-        runner = self.bare_runner()
-        runner.graph_builder = MagicMock()
-        runner.graph_builder.get_nearby_node_positions.return_value = [
-            (20.0, 20.0),
-            (10.0, 30.0),
-        ]
-        frame = SimpleNamespace(
-            easting=10.0,
-            northing=20.0,
-            altitude=100.0,
+    def test_goal_found_requires_an_exact_score_of_100(self):
+        self.assertTrue(
+            PriorityMapRunner._scene_contains_goal(
+                {"car": {"score": 100}},
+            )
         )
-
-        directions = runner._coverage_directions(
-            frame,
-            np.zeros((80, 100, 3), dtype=np.uint8),
+        self.assertTrue(
+            PriorityMapRunner._scene_contains_goal(
+                {"car": {"score": "100"}},
+            )
         )
-
-        self.assertEqual(directions, [])
-        runner.graph_builder.get_nearby_node_positions.assert_not_called()
-
-    def test_coverage_directions_only_use_nodes_outside_flow_viewport(self):
-        runner = self.bare_runner()
-        runner.flow_localizer = SimpleNamespace(
-            cumulative_transform_dx=5.0,
-            cumulative_transform_dy=-3.0,
+        self.assertFalse(
+            PriorityMapRunner._scene_contains_goal(
+                {"road": {"score": 99.99}},
+            )
         )
-        runner.graph_builder = MagicMock()
-        runner.graph_builder.get_nearby_node_positions.return_value = [
-            (55.0, 37.0),
-            (5.0, -3.0),
-            (104.999, 76.999),
-            (105.0, 37.0),
-            (4.0, 37.0),
-            (55.0, -4.0),
-            (55.0, 77.0),
-        ]
-        frame = SimpleNamespace(
-            easting=None,
-            northing=None,
-            altitude=None,
+        self.assertFalse(
+            PriorityMapRunner._scene_contains_goal(
+                {"invalid": {"score": 101}},
+            )
         )
-
-        directions = runner._coverage_directions(
-            frame,
-            np.zeros((80, 100, 3), dtype=np.uint8),
-        )
-
-        self.assertEqual(len(directions), 4)
-        np.testing.assert_allclose(directions[0], [1.0, 0.0])
-        np.testing.assert_allclose(directions[1], [-1.0, 0.0])
-        np.testing.assert_allclose(directions[2], [0.0, 1.0])
-        np.testing.assert_allclose(directions[3], [0.0, -1.0])
-        query = runner.graph_builder.get_nearby_node_positions.call_args
-        np.testing.assert_allclose(query.args[0], [55.0, 37.0])
-        self.assertAlmostEqual(
-            query.kwargs["radius"],
-            float(np.hypot(100, 80)),
-        )
-        self.assertEqual(query.kwargs["limit"], 50)
+        self.assertFalse(PriorityMapRunner._scene_contains_goal(None))
 
     def test_debug_mode_draws_direction_and_came_from_arrows(self):
         runner = self.bare_runner()

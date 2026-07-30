@@ -27,6 +27,7 @@ def run_priority_map(
     scene_model: str | None = None,
     vector_ema_alpha: float = config.VECTOR_EMA_ALPHA,
     max_direction_turn_degrees: float = config.MAX_DIRECTION_TURN_DEGREES,
+    exclusion_angle_degrees: float = config.EXCLUSION_ANGLE_DEGREES,
 ) -> PriorityMapResult:
     runner = PriorityMapRunner(
         image_folder=image_folder,
@@ -48,6 +49,7 @@ def run_priority_map(
         scene_model=scene_model,
         vector_ema_alpha=vector_ema_alpha,
         max_direction_turn_degrees=max_direction_turn_degrees,
+        exclusion_angle_degrees=exclusion_angle_degrees,
     )
 
     try:

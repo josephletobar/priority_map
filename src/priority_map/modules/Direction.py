@@ -2,6 +2,8 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from priority_map.config import params as config
+
 
 @dataclass
 class DirectionDecision:
@@ -11,19 +13,36 @@ class DirectionDecision:
 
 
 class Direction:
-    EXCLUSION_ANGLE_DEGREES = 60.0
+    EXCLUSION_ANGLE_DEGREES = config.EXCLUSION_ANGLE_DEGREES
     GRID_SIZE = 5
+
+    def __init__(
+        self,
+        exclusion_angle_degrees: float = EXCLUSION_ANGLE_DEGREES,
+    ):
+        if not 0 < exclusion_angle_degrees <= 180:
+            raise ValueError(
+                "exclusion_angle_degrees must be greater than 0 "
+                "and at most 180."
+            )
+        self.exclusion_angle_degrees = float(exclusion_angle_degrees)
 
     def get_direction(
         self,
         numerical_heatmap: np.ndarray,
         came_from: np.ndarray | None = None,
         coverage_directions=None,
+        forbidden_directions=None,
+        candidate_validator=None,
+        explore_when_empty=False,
     ) -> np.ndarray:
         return self.get_decision(
             numerical_heatmap,
             came_from=came_from,
             coverage_directions=coverage_directions,
+            forbidden_directions=forbidden_directions,
+            candidate_validator=candidate_validator,
+            explore_when_empty=explore_when_empty,
         ).direction
 
     def get_decision(
@@ -31,6 +50,9 @@ class Direction:
         numerical_heatmap: np.ndarray,
         came_from: np.ndarray | None = None,
         coverage_directions=None,
+        forbidden_directions=None,
+        candidate_validator=None,
+        explore_when_empty=False,
     ) -> DirectionDecision:
         """Choose a non-backtracking patch using heat and graph coverage."""
         numerical_heatmap = np.asarray(numerical_heatmap, dtype=np.float32)
@@ -44,7 +66,15 @@ class Direction:
             0,
         )
         coverage_directions = list(coverage_directions or [])
-        if not np.any(numerical_heatmap) and not coverage_directions:
+        hard_forbidden_directions = list(forbidden_directions or [])
+        if came_from is not None:
+            hard_forbidden_directions.append(came_from)
+        if (
+            not np.any(numerical_heatmap)
+            and not coverage_directions
+            and not hard_forbidden_directions
+            and not explore_when_empty
+        ):
             return self._hold_decision()
 
         height, width = numerical_heatmap.shape
@@ -84,9 +114,15 @@ class Direction:
                     (
                         patch_heat,
                         patch_direction,
-                        self.is_blocked_by_came_from(
-                            patch_direction,
-                            came_from,
+                        (
+                            self.is_blocked_by_directions(
+                                patch_direction,
+                                hard_forbidden_directions,
+                            )
+                            or (
+                                candidate_validator is not None
+                                and not candidate_validator(patch_direction)
+                            )
                         ),
                         self.coverage_count(
                             patch_direction,
@@ -147,7 +183,10 @@ class Direction:
     def is_blocked_by_came_from(self, direction, came_from):
         if came_from is None:
             return False
-        return self._is_forbidden(direction, [came_from])
+        return self.is_blocked_by_directions(direction, [came_from])
+
+    def is_blocked_by_directions(self, direction, forbidden_directions):
+        return self.coverage_count(direction, forbidden_directions) > 0
 
     def coverage_count(self, direction, coverage_directions):
         direction_magnitude = np.linalg.norm(direction)
@@ -155,7 +194,7 @@ class Direction:
             return 0
 
         direction = direction / direction_magnitude
-        cone_cosine = np.cos(np.deg2rad(self.EXCLUSION_ANGLE_DEGREES))
+        cone_cosine = np.cos(np.deg2rad(self.exclusion_angle_degrees))
         count = 0
         for vector in coverage_directions or []:
             vector = np.asarray(vector, dtype=np.float32)
@@ -168,6 +207,3 @@ class Direction:
             if np.dot(direction, vector) >= cone_cosine:
                 count += 1
         return count
-
-    def _is_forbidden(self, direction, forbidden_directions):
-        return self.coverage_count(direction, forbidden_directions) > 0

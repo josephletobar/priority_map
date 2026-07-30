@@ -58,11 +58,11 @@ For each visible category, output:
   when no such relationship is clearly supported.
 
 Scoring guide:
-- 0 = not relevant
-- 25 = weak context
-- 50 = useful
-- 75 = highly useful
-- 100 = the concrete mission target category, or directly mission-critical visible evidence
+- 0 = not relevant to the goal
+- 25 = weak context to the goal being present
+- 50 = useful to achieving the goal
+- 75 = highly useful to achieving the goal
+- 100 = reserved exclusively for a clearly visible instance of the exact goal object itself. Never assign 100 to context, clues, proxies, containers, locations, related objects, or other mission-critical evidence.
 
 Rules:
 - Include all major visible categories

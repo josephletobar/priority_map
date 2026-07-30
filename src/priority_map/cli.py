@@ -57,6 +57,12 @@ def parse_args(argv=None):
         default=config.MAX_IMAGE_EDGE,
         help="Resize input images so the longest edge is at most this many pixels. Use 0 to disable.",
     )
+    parser.add_argument(
+        "--exclusion-angle-degrees",
+        type=float,
+        default=config.EXCLUSION_ANGLE_DEGREES,
+        help="Half-angle around each forbidden steering bearing.",
+    )
     parser.add_argument("--debug", action="store_true")
     parser.add_argument("--panoramic", action="store_true")
     return parser.parse_args(argv)
@@ -84,6 +90,7 @@ def main(argv=None):
         gps_csv=args.gps_csv,
         camera_intrinsics=args.camera_intrinsics,
         scene_model=args.scene_model,
+        exclusion_angle_degrees=args.exclusion_angle_degrees,
     )
 
     if args.debug:

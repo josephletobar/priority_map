@@ -28,6 +28,11 @@ class Segmentation:
     score: float
     centroid: tuple[int, int] | None = None
     geo_pos: tuple[float, float] | None = None
+    longitude: float | None = None
+    latitude: float | None = None
+    ground_height_m: float | None = None
+    coverage_radius_m: float | None = None
+    observed_frame: int | None = None
 
 
 @dataclass

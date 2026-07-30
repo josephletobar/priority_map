@@ -56,7 +56,15 @@ class GraphBuilder:
                 color_b INTEGER,
                 color_g INTEGER,
                 color_r INTEGER,
-                mask_blob BLOB
+                mask_blob BLOB,
+                longitude REAL,
+                latitude REAL,
+                ground_height_m REAL,
+                coverage_radius_m REAL,
+                first_seen_frame INTEGER,
+                observed_frame INTEGER,
+                observation_count INTEGER NOT NULL DEFAULT 1,
+                coordinate_mode TEXT NOT NULL DEFAULT 'flow'
             )
         ''')
 
@@ -66,6 +74,29 @@ class GraphBuilder:
             self.cursor.execute(
                 'ALTER TABLE nodes ADD COLUMN mask_blob BLOB'
             )
+        node_column_migrations = {
+            'longitude': 'REAL',
+            'latitude': 'REAL',
+            'ground_height_m': 'REAL',
+            'coverage_radius_m': 'REAL',
+            'first_seen_frame': 'INTEGER',
+            'observed_frame': 'INTEGER',
+            'observation_count': 'INTEGER NOT NULL DEFAULT 1',
+            'coordinate_mode': "TEXT NOT NULL DEFAULT 'flow'",
+        }
+        for column, declaration in node_column_migrations.items():
+            if column not in node_columns:
+                self.cursor.execute(
+                    f'ALTER TABLE nodes ADD COLUMN {column} {declaration}'
+                )
+        self.cursor.execute(
+            '''
+            UPDATE nodes
+            SET first_seen_frame = observed_frame
+            WHERE first_seen_frame IS NULL
+              AND observed_frame IS NOT NULL
+            '''
+        )
 
         self.cursor.execute('''
             CREATE TABLE IF NOT EXISTS edges (
@@ -101,7 +132,14 @@ class GraphBuilder:
                 color_b INTEGER,
                 color_g INTEGER,
                 color_r INTEGER,
-                mask_blob BLOB
+                mask_blob BLOB,
+                longitude REAL,
+                latitude REAL,
+                ground_height_m REAL,
+                coverage_radius_m REAL,
+                first_seen_frame INTEGER,
+                observed_frame INTEGER,
+                coordinate_mode TEXT NOT NULL DEFAULT 'flow'
             )
         ''')
 
@@ -111,6 +149,29 @@ class GraphBuilder:
             self.cursor.execute(
                 'ALTER TABLE semantic_nodes ADD COLUMN mask_blob BLOB'
             )
+        semantic_column_migrations = {
+            'longitude': 'REAL',
+            'latitude': 'REAL',
+            'ground_height_m': 'REAL',
+            'coverage_radius_m': 'REAL',
+            'first_seen_frame': 'INTEGER',
+            'observed_frame': 'INTEGER',
+            'coordinate_mode': "TEXT NOT NULL DEFAULT 'flow'",
+        }
+        for column, declaration in semantic_column_migrations.items():
+            if column not in semantic_node_columns:
+                self.cursor.execute(
+                    'ALTER TABLE semantic_nodes '
+                    f'ADD COLUMN {column} {declaration}'
+                )
+        self.cursor.execute(
+            '''
+            UPDATE semantic_nodes
+            SET first_seen_frame = observed_frame
+            WHERE first_seen_frame IS NULL
+              AND observed_frame IS NOT NULL
+            '''
+        )
 
         self.cursor.execute('''
             CREATE TABLE IF NOT EXISTS semantic_edges (
@@ -248,12 +309,33 @@ class GraphBuilder:
         max_idx = row[0] if row[0] is not None else -1
         return f"semantic_{max_idx + 1}"
 
-    def _find_matching_node(self, base_label, x, y):
+    def _find_matching_node(
+        self,
+        base_label,
+        x,
+        y,
+        *,
+        coordinate_mode="flow",
+        distance_threshold=None,
+    ):
         """Find existing node with same base_label within MATCH_DISTANCE_THRESHOLD"""
-        self.cursor.execute('SELECT id, geo_pos_x, geo_pos_y FROM nodes WHERE label LIKE ?', (f'{base_label}%',))
+        distance_threshold = (
+            self.MATCH_DISTANCE_THRESHOLD
+            if distance_threshold is None
+            else float(distance_threshold)
+        )
+        self.cursor.execute(
+            '''
+            SELECT id, geo_pos_x, geo_pos_y
+            FROM nodes
+            WHERE label LIKE ?
+              AND coordinate_mode = ?
+            ''',
+            (f'{base_label}%', coordinate_mode),
+        )
         for node_id, node_x, node_y in self.cursor.fetchall():
             distance = float(np.linalg.norm(np.array([x, y]) - np.array([node_x, node_y])))
-            if distance <= self.MATCH_DISTANCE_THRESHOLD:
+            if distance <= distance_threshold:
                 return node_id
         return None
 
@@ -261,7 +343,24 @@ class GraphBuilder:
         """Attach matching DB node IDs without creating or updating graph nodes."""
         for seg in clustered_segmentations:
             x, y = seg.geo_pos
-            seg.node_id = self._find_matching_node(seg.label, x, y)
+            is_geographic = (
+                getattr(seg, "longitude", None) is not None
+                and getattr(seg, "latitude", None) is not None
+            )
+            seg.node_id = self._find_matching_node(
+                seg.label,
+                x,
+                y,
+                coordinate_mode="wgs84" if is_geographic else "flow",
+                distance_threshold=(
+                    max(
+                        1.0,
+                        float(getattr(seg, "coverage_radius_m", 0.0) or 0.0),
+                    )
+                    if is_geographic
+                    else None
+                ),
+            )
 
     def add_nodes(self, clustered_segmentations):
         """Add ClusteredSegmentations as nodes and create edges within 200px distance"""
@@ -276,10 +375,70 @@ class GraphBuilder:
         for seg in clustered_segmentations:
             base_label = seg.label
             x, y = seg.geo_pos
+            longitude = getattr(seg, "longitude", None)
+            latitude = getattr(seg, "latitude", None)
+            ground_height_m = getattr(seg, "ground_height_m", None)
+            coverage_radius_m = getattr(seg, "coverage_radius_m", None)
+            observed_frame = getattr(seg, "observed_frame", None)
+            is_geographic = (
+                longitude is not None
+                and latitude is not None
+                and coverage_radius_m is not None
+            )
+            coordinate_mode = "wgs84" if is_geographic else "flow"
+            matching_distance = (
+                max(
+                    1.0,
+                    min(5.0, float(coverage_radius_m) * 0.35),
+                )
+                if is_geographic
+                else None
+            )
 
-            match = self._find_matching_node(base_label, x, y)
+            match = self._find_matching_node(
+                base_label,
+                x,
+                y,
+                coordinate_mode=coordinate_mode,
+                distance_threshold=matching_distance,
+            )
             if match:
                 seg.node_id = match
+                if is_geographic:
+                    self.cursor.execute(
+                        '''
+                        SELECT observation_count
+                        FROM nodes
+                        WHERE id = ?
+                        ''',
+                        (match,),
+                    )
+                    row = self.cursor.fetchone()
+                    observation_count = (
+                        int(row[0] or 1) + 1
+                        if row is not None
+                        else 2
+                    )
+                    self.cursor.execute(
+                        '''
+                        UPDATE nodes
+                        SET observed_frame = ?,
+                            observation_count = ?,
+                            coverage_radius_m = MAX(
+                                coverage_radius_m,
+                                ?
+                            )
+                        WHERE id = ?
+                        ''',
+                        (
+                            int(observed_frame)
+                            if observed_frame is not None
+                            else None,
+                            observation_count,
+                            float(coverage_radius_m),
+                            match,
+                        ),
+                    )
                 source_label = getattr(seg, "source_label", None) or base_label
                 result["label_to_node_ids"].setdefault(source_label, []).append(match)
                 continue
@@ -290,10 +449,20 @@ class GraphBuilder:
             mask_blob = self._encode_mask(seg.mask)
             self.cursor.execute('''
                 INSERT OR REPLACE INTO nodes
-                (id, label, score, count, geo_pos_x, geo_pos_y, color_b, color_g, color_r, mask_blob)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (id, label, score, count, geo_pos_x, geo_pos_y,
+                 color_b, color_g, color_r, mask_blob, longitude, latitude,
+                 ground_height_m, coverage_radius_m, observed_frame,
+                 first_seen_frame, observation_count, coordinate_mode)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (node_id, seg.label, self._to_float(seg.score), int(seg.count), float(x), float(y),
-                  int(color[0]), int(color[1]), int(color[2]), mask_blob))
+                  int(color[0]), int(color[1]), int(color[2]), mask_blob,
+                  float(longitude) if longitude is not None else None,
+                  float(latitude) if latitude is not None else None,
+                  float(ground_height_m) if ground_height_m is not None else None,
+                  float(coverage_radius_m) if coverage_radius_m is not None else None,
+                  int(observed_frame) if observed_frame is not None else None,
+                  int(observed_frame) if observed_frame is not None else None,
+                  1, coordinate_mode))
 
             new_node_ids.append((node_id, x, y))
             seg.node_id = node_id
@@ -396,7 +565,10 @@ class GraphBuilder:
         placeholders = ','.join('?' for _ in node_ids)
         self.cursor.execute(
             f'''
-            SELECT id, label, score, count, geo_pos_x, geo_pos_y, color_b, color_g, color_r, mask_blob
+            SELECT id, label, score, count, geo_pos_x, geo_pos_y,
+                   color_b, color_g, color_r, mask_blob,
+                   longitude, latitude, ground_height_m,
+                   coverage_radius_m, observed_frame
             FROM nodes WHERE id IN ({placeholders})
             ''',
             tuple(node_ids),
@@ -404,7 +576,12 @@ class GraphBuilder:
 
         clustered = []
         for row in self.cursor.fetchall():
-            node_id, label, score, count, x, y, color_b, color_g, color_r, mask_blob = row
+            (
+                node_id, label, score, count, x, y,
+                color_b, color_g, color_r, mask_blob,
+                longitude, latitude, ground_height_m,
+                coverage_radius_m, observed_frame,
+            ) = row
             cluster = ClusteredSegmentation(
                 label=label,
                 centroid=(int(round(x)), int(round(y))),
@@ -413,6 +590,11 @@ class GraphBuilder:
                 mask=self._decode_mask(mask_blob),
                 geo_pos=(x, y),
                 color=(color_b, color_g, color_r),
+                longitude=longitude,
+                latitude=latitude,
+                ground_height_m=ground_height_m,
+                coverage_radius_m=coverage_radius_m,
+                observed_frame=observed_frame,
             )
             cluster.base_node_id = node_id
             clustered.append(cluster)
@@ -426,7 +608,10 @@ class GraphBuilder:
         placeholders = ','.join('?' for _ in semantic_node_ids)
         self.cursor.execute(
             f'''
-            SELECT id, label, score, count, geo_pos_x, geo_pos_y, color_b, color_g, color_r, mask_blob
+            SELECT id, label, score, count, geo_pos_x, geo_pos_y,
+                   color_b, color_g, color_r, mask_blob,
+                   longitude, latitude, ground_height_m,
+                   coverage_radius_m, observed_frame
             FROM semantic_nodes WHERE id IN ({placeholders})
             ''',
             tuple(semantic_node_ids),
@@ -434,7 +619,12 @@ class GraphBuilder:
 
         clustered = []
         for row in self.cursor.fetchall():
-            node_id, label, score, count, x, y, color_b, color_g, color_r, mask_blob = row
+            (
+                node_id, label, score, count, x, y,
+                color_b, color_g, color_r, mask_blob,
+                longitude, latitude, ground_height_m,
+                coverage_radius_m, observed_frame,
+            ) = row
             cluster = ClusteredSegmentation(
                 label=label,
                 centroid=(int(round(x)), int(round(y))),
@@ -443,6 +633,11 @@ class GraphBuilder:
                 mask=self._decode_mask(mask_blob),
                 geo_pos=(x, y),
                 color=(color_b, color_g, color_r),
+                longitude=longitude,
+                latitude=latitude,
+                ground_height_m=ground_height_m,
+                coverage_radius_m=coverage_radius_m,
+                observed_frame=observed_frame,
             )
             cluster.semantic_node_id = node_id
             clustered.append(cluster)
@@ -491,8 +686,12 @@ class GraphBuilder:
 
         self.cursor.execute('''
             INSERT INTO semantic_nodes
-            (id, label, score, count, geo_pos_x, geo_pos_y, color_b, color_g, color_r, mask_blob)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (id, label, score, count, geo_pos_x, geo_pos_y,
+             color_b, color_g, color_r, mask_blob, longitude, latitude,
+             ground_height_m, coverage_radius_m, first_seen_frame,
+             observed_frame,
+             coordinate_mode)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (
             semantic_node_id,
             semantic_cluster.label,
@@ -504,6 +703,18 @@ class GraphBuilder:
             0,
             0,
             mask_blob,
+            semantic_cluster.longitude,
+            semantic_cluster.latitude,
+            semantic_cluster.ground_height_m,
+            semantic_cluster.coverage_radius_m,
+            semantic_cluster.observed_frame,
+            semantic_cluster.observed_frame,
+            (
+                "wgs84"
+                if semantic_cluster.longitude is not None
+                and semantic_cluster.latitude is not None
+                else "flow"
+            ),
         ))
 
         return semantic_node_id
@@ -524,7 +735,13 @@ class GraphBuilder:
                 color_b = ?,
                 color_g = ?,
                 color_r = ?,
-                mask_blob = ?
+                mask_blob = ?,
+                longitude = ?,
+                latitude = ?,
+                ground_height_m = ?,
+                coverage_radius_m = ?,
+                observed_frame = ?,
+                coordinate_mode = ?
             WHERE id = ?
         ''', (
             semantic_cluster.label,
@@ -536,6 +753,17 @@ class GraphBuilder:
             int(color[1]),
             int(color[2]),
             mask_blob,
+            semantic_cluster.longitude,
+            semantic_cluster.latitude,
+            semantic_cluster.ground_height_m,
+            semantic_cluster.coverage_radius_m,
+            semantic_cluster.observed_frame,
+            (
+                "wgs84"
+                if semantic_cluster.longitude is not None
+                and semantic_cluster.latitude is not None
+                else "flow"
+            ),
             semantic_node_id,
         ))
 
@@ -621,6 +849,49 @@ class GraphBuilder:
             mask=merged_mask,
             geo_pos=avg_geo_pos,
             color=None,
+            longitude=(
+                float(np.mean([
+                    cluster.longitude
+                    for cluster in base_clusters
+                    if cluster.longitude is not None
+                ]))
+                if any(cluster.longitude is not None for cluster in base_clusters)
+                else None
+            ),
+            latitude=(
+                float(np.mean([
+                    cluster.latitude
+                    for cluster in base_clusters
+                    if cluster.latitude is not None
+                ]))
+                if any(cluster.latitude is not None for cluster in base_clusters)
+                else None
+            ),
+            ground_height_m=(
+                float(np.mean([
+                    cluster.ground_height_m
+                    for cluster in base_clusters
+                    if cluster.ground_height_m is not None
+                ]))
+                if any(cluster.ground_height_m is not None for cluster in base_clusters)
+                else None
+            ),
+            coverage_radius_m=max(
+                (
+                    float(cluster.coverage_radius_m)
+                    for cluster in base_clusters
+                    if cluster.coverage_radius_m is not None
+                ),
+                default=None,
+            ),
+            observed_frame=max(
+                (
+                    int(cluster.observed_frame)
+                    for cluster in base_clusters
+                    if cluster.observed_frame is not None
+                ),
+                default=None,
+            ),
         )
 
     def _recompute_semantic_node_from_members(self, semantic_node_id, label=None):

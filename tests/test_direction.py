@@ -99,6 +99,30 @@ class DirectionTests(unittest.TestCase):
             np.array([-1.0, 0.0], dtype=np.float32),
         )
 
+    def test_geographic_validator_rejects_patch_and_uses_next_best(self):
+        heatmap = np.zeros((100, 100), dtype=np.float32)
+        heatmap[40:60, 80:100] = 100.0
+        heatmap[0:20, 40:60] = 50.0
+
+        decision = Direction().get_decision(
+            heatmap,
+            candidate_validator=lambda direction: direction[0] <= 0.5,
+        )
+
+        self.assertGreater(decision.direction[1], 0.0)
+        self.assertLessEqual(decision.direction[0], 0.5)
+
+    def test_all_geographic_candidates_blocked_returns_hold(self):
+        decision = Direction().get_decision(
+            np.ones((20, 20), dtype=np.float32),
+            candidate_validator=lambda _: False,
+        )
+
+        np.testing.assert_array_equal(
+            decision.direction,
+            np.zeros(2, dtype=np.float32),
+        )
+
     def test_heat_outside_a_forbidden_cone_remains_available(self):
         numerical_heatmap = np.zeros((101, 101), dtype=np.float32)
         numerical_heatmap[50, 80] = 100
@@ -145,6 +169,47 @@ class DirectionTests(unittest.TestCase):
             direction,
             np.array([1.0, 0.0], dtype=np.float32),
         )
+
+    def test_exclusion_angle_is_configurable(self):
+        diagonal = np.array([1.0, 1.0], dtype=np.float32)
+        candidate = np.array([1.0, 0.0], dtype=np.float32)
+
+        self.assertEqual(
+            Direction(exclusion_angle_degrees=30).coverage_count(
+                candidate,
+                [diagonal],
+            ),
+            0,
+        )
+        self.assertEqual(
+            Direction(exclusion_angle_degrees=60).coverage_count(
+                candidate,
+                [diagonal],
+            ),
+            1,
+        )
+
+    def test_exclusion_angle_rejects_invalid_values(self):
+        with self.assertRaises(ValueError):
+            Direction(exclusion_angle_degrees=0)
+        with self.assertRaises(ValueError):
+            Direction(exclusion_angle_degrees=181)
+
+    def test_multiple_hard_forbidden_bearings_handle_a_corner(self):
+        numerical_heatmap = np.zeros((101, 101), dtype=np.float32)
+        numerical_heatmap[20, 20] = 100
+        numerical_heatmap[80, 80] = 75
+
+        direction = self.direction.get_direction(
+            numerical_heatmap,
+            forbidden_directions=[
+                np.array([-1.0, 0.0], dtype=np.float32),
+                np.array([0.0, 1.0], dtype=np.float32),
+            ],
+        )
+
+        self.assertGreater(direction[0], 0)
+        self.assertLess(direction[1], 0)
 
     def test_fully_covered_scene_uses_least_covered_patch(self):
         numerical_heatmap = np.zeros((101, 101), dtype=np.float32)
