@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 import cv2
 import numpy as np
 
-from priority_map.modules.Direction import Direction
+from priority_map.modules.Direction import Direction, DirectionDecision
 from priority_map.modules.drone_motion import DroneMotion
 from priority_map.runner import PriorityMapRunner
 
@@ -106,10 +106,13 @@ class RunnerFrameInputTests(unittest.TestCase):
         runner.drone_motion = MagicMock()
         runner.drone_motion.get_came_from.return_value = came_from
         runner.direction = MagicMock()
-        runner.direction.get_direction.return_value = np.array(
-            [1.0, 0.0],
-            dtype=np.float32,
+        runner.direction.get_decision.return_value = DirectionDecision(
+            direction=np.array([1.0, 0.0], dtype=np.float32),
+            patch_heat=100.0,
+            coverage_count=0,
         )
+        runner.direction.is_blocked_by_came_from.return_value = False
+        runner.direction.coverage_count.return_value = 0
         runner.flow_localizer = MagicMock()
         runner.flow_localizer.cumulative_transform_dx = 0.0
         runner.flow_localizer.cumulative_transform_dy = 0.0
@@ -154,14 +157,21 @@ class RunnerFrameInputTests(unittest.TestCase):
             np.array([1.0, 0.0], dtype=np.float32),
         )
         np.testing.assert_array_equal(result.came_from, came_from)
-        direction_args = runner.direction.get_direction.call_args.args
-        self.assertIs(direction_args[0], numerical_heatmap)
-        np.testing.assert_array_equal(direction_args[1], came_from)
-        self.assertEqual(len(direction_args), 2)
+        self.assertEqual(result.direction_mode, "target")
+        direction_call = runner.direction.get_decision.call_args
+        self.assertIs(direction_call.args[0], numerical_heatmap)
+        np.testing.assert_array_equal(
+            direction_call.kwargs["came_from"],
+            came_from,
+        )
+        self.assertEqual(
+            direction_call.kwargs["coverage_directions"],
+            [],
+        )
         self.assertEqual(result.numerical_heatmap.shape, image.shape[:2])
         self.assertEqual(runner.frames_processed, 8)
 
-    def test_coverage_directions_use_gps_coordinates(self):
+    def test_coverage_directions_skip_gps_until_projection_is_supported(self):
         runner = self.bare_runner()
         runner.graph_builder = MagicMock()
         runner.graph_builder.get_nearby_node_positions.return_value = [
@@ -179,10 +189,10 @@ class RunnerFrameInputTests(unittest.TestCase):
             np.zeros((80, 100, 3), dtype=np.uint8),
         )
 
-        np.testing.assert_allclose(directions[0], [1.0, 0.0])
-        np.testing.assert_allclose(directions[1], [0.0, 1.0])
+        self.assertEqual(directions, [])
+        runner.graph_builder.get_nearby_node_positions.assert_not_called()
 
-    def test_coverage_directions_flip_flow_image_y(self):
+    def test_coverage_directions_only_use_nodes_outside_flow_viewport(self):
         runner = self.bare_runner()
         runner.flow_localizer = SimpleNamespace(
             cumulative_transform_dx=5.0,
@@ -190,8 +200,13 @@ class RunnerFrameInputTests(unittest.TestCase):
         )
         runner.graph_builder = MagicMock()
         runner.graph_builder.get_nearby_node_positions.return_value = [
-            (65.0, 37.0),
-            (55.0, 47.0),
+            (55.0, 37.0),
+            (5.0, -3.0),
+            (104.999, 76.999),
+            (105.0, 37.0),
+            (4.0, 37.0),
+            (55.0, -4.0),
+            (55.0, 77.0),
         ]
         frame = SimpleNamespace(
             easting=None,
@@ -204,8 +219,18 @@ class RunnerFrameInputTests(unittest.TestCase):
             np.zeros((80, 100, 3), dtype=np.uint8),
         )
 
+        self.assertEqual(len(directions), 4)
         np.testing.assert_allclose(directions[0], [1.0, 0.0])
-        np.testing.assert_allclose(directions[1], [0.0, -1.0])
+        np.testing.assert_allclose(directions[1], [-1.0, 0.0])
+        np.testing.assert_allclose(directions[2], [0.0, 1.0])
+        np.testing.assert_allclose(directions[3], [0.0, -1.0])
+        query = runner.graph_builder.get_nearby_node_positions.call_args
+        np.testing.assert_allclose(query.args[0], [55.0, 37.0])
+        self.assertAlmostEqual(
+            query.kwargs["radius"],
+            float(np.hypot(100, 80)),
+        )
+        self.assertEqual(query.kwargs["limit"], 50)
 
     def test_debug_mode_draws_direction_and_came_from_arrows(self):
         runner = self.bare_runner()

@@ -1,4 +1,13 @@
+from dataclasses import dataclass
+
 import numpy as np
+
+
+@dataclass
+class DirectionDecision:
+    direction: np.ndarray
+    patch_heat: float
+    coverage_count: int
 
 
 class Direction:
@@ -11,22 +20,32 @@ class Direction:
         came_from: np.ndarray | None = None,
         coverage_directions=None,
     ) -> np.ndarray:
-        """Return a unit vector toward the patch with the most total heat."""
+        return self.get_decision(
+            numerical_heatmap,
+            came_from=came_from,
+            coverage_directions=coverage_directions,
+        ).direction
+
+    def get_decision(
+        self,
+        numerical_heatmap: np.ndarray,
+        came_from: np.ndarray | None = None,
+        coverage_directions=None,
+    ) -> DirectionDecision:
+        """Choose a non-backtracking patch using heat and graph coverage."""
         numerical_heatmap = np.asarray(numerical_heatmap, dtype=np.float32)
         if numerical_heatmap.ndim != 2:
             raise ValueError("numerical_heatmap must be a two-dimensional array.")
         if numerical_heatmap.size == 0:
-            return np.zeros(2, dtype=np.float32)
+            return self._hold_decision()
 
         numerical_heatmap = np.maximum(
             np.nan_to_num(numerical_heatmap),
             0,
         )
-        forbidden_directions = []
-        if came_from is not None:
-            forbidden_directions.append(came_from)
-        if coverage_directions is not None:
-            forbidden_directions.extend(coverage_directions)
+        coverage_directions = list(coverage_directions or [])
+        if not np.any(numerical_heatmap) and not coverage_directions:
+            return self._hold_decision()
 
         height, width = numerical_heatmap.shape
         row_edges = self._patch_edges(height)
@@ -65,19 +84,40 @@ class Direction:
                     (
                         patch_heat,
                         patch_direction,
-                        self._is_forbidden(
+                        self.is_blocked_by_came_from(
                             patch_direction,
-                            forbidden_directions,
+                            came_from,
+                        ),
+                        self.coverage_count(
+                            patch_direction,
+                            coverage_directions,
                         ),
                     )
                 )
 
         if not patches:
-            return np.array([0.0, 1.0], dtype=np.float32)
+            return self._hold_decision()
 
-        available_patches = [patch for patch in patches if not patch[2]]
-        candidate_patches = available_patches or patches
-        _, direction, _ = max(
+        non_backtracking = [patch for patch in patches if not patch[2]]
+        if not non_backtracking:
+            return self._hold_decision()
+
+        uncovered = [
+            patch
+            for patch in non_backtracking
+            if patch[3] == 0
+        ]
+        if uncovered:
+            candidate_patches = uncovered
+        else:
+            minimum_coverage = min(patch[3] for patch in non_backtracking)
+            candidate_patches = [
+                patch
+                for patch in non_backtracking
+                if patch[3] == minimum_coverage
+            ]
+
+        patch_heat, direction, _, selected_coverage = max(
             candidate_patches,
             key=lambda patch: (
                 patch[0],
@@ -85,7 +125,18 @@ class Direction:
                 -abs(patch[1][0]),
             ),
         )
-        return direction
+        return DirectionDecision(
+            direction=np.asarray(direction, dtype=np.float32),
+            patch_heat=patch_heat,
+            coverage_count=selected_coverage,
+        )
+
+    def _hold_decision(self):
+        return DirectionDecision(
+            direction=np.zeros(2, dtype=np.float32),
+            patch_heat=0.0,
+            coverage_count=0,
+        )
 
     def _patch_edges(self, length):
         patch_count = min(self.GRID_SIZE, length)
@@ -93,14 +144,20 @@ class Direction:
             np.linspace(0, length, patch_count + 1),
         ).astype(np.int32)
 
-    def _is_forbidden(self, direction, forbidden_directions):
+    def is_blocked_by_came_from(self, direction, came_from):
+        if came_from is None:
+            return False
+        return self._is_forbidden(direction, [came_from])
+
+    def coverage_count(self, direction, coverage_directions):
         direction_magnitude = np.linalg.norm(direction)
         if direction_magnitude == 0:
-            return False
+            return 0
 
         direction = direction / direction_magnitude
         cone_cosine = np.cos(np.deg2rad(self.EXCLUSION_ANGLE_DEGREES))
-        for vector in forbidden_directions:
+        count = 0
+        for vector in coverage_directions or []:
             vector = np.asarray(vector, dtype=np.float32)
             if vector.shape != (2,) or not np.all(np.isfinite(vector)):
                 continue
@@ -109,5 +166,8 @@ class Direction:
                 continue
             vector = vector / magnitude
             if np.dot(direction, vector) >= cone_cosine:
-                return True
-        return False
+                count += 1
+        return count
+
+    def _is_forbidden(self, direction, forbidden_directions):
+        return self.coverage_count(direction, forbidden_directions) > 0

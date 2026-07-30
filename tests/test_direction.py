@@ -42,7 +42,7 @@ class DirectionTests(unittest.TestCase):
         )
         self.assertAlmostEqual(float(np.linalg.norm(direction)), 1.0, places=6)
 
-    def test_centered_or_empty_heatmap_defaults_forward(self):
+    def test_centered_heat_defaults_forward_and_empty_heat_holds(self):
         centered = self.heatmap_with_target(50, 50)
         empty = np.zeros((101, 101), dtype=np.float32)
 
@@ -52,7 +52,7 @@ class DirectionTests(unittest.TestCase):
         )
         np.testing.assert_allclose(
             self.direction.get_direction(empty),
-            np.array([0.0, 1.0], dtype=np.float32),
+            np.zeros(2, dtype=np.float32),
         )
 
     def test_requires_a_two_dimensional_numerical_heatmap(self):
@@ -144,6 +144,68 @@ class DirectionTests(unittest.TestCase):
         np.testing.assert_allclose(
             direction,
             np.array([1.0, 0.0], dtype=np.float32),
+        )
+
+    def test_fully_covered_scene_uses_least_covered_patch(self):
+        numerical_heatmap = np.zeros((101, 101), dtype=np.float32)
+        numerical_heatmap[50, 80] = 100
+        numerical_heatmap[50, 20] = 75
+        coverage_directions = [
+            np.array([1.0, 0.0], dtype=np.float32),
+            np.array([1.0, 0.0], dtype=np.float32),
+            np.array([-1.0, 0.0], dtype=np.float32),
+            np.array([0.0, 1.0], dtype=np.float32),
+            np.array([0.0, -1.0], dtype=np.float32),
+        ]
+
+        decision = self.direction.get_decision(
+            numerical_heatmap,
+            coverage_directions=coverage_directions,
+        )
+
+        np.testing.assert_allclose(decision.direction, [-1.0, 0.0])
+        self.assertEqual(decision.coverage_count, 1)
+        self.assertEqual(decision.patch_heat, 75.0)
+
+    def test_empty_heatmap_with_coverage_explores_an_uncovered_patch(self):
+        decision = self.direction.get_decision(
+            np.zeros((101, 101), dtype=np.float32),
+            coverage_directions=[
+                np.array([1.0, 0.0], dtype=np.float32),
+            ],
+        )
+
+        self.assertGreater(float(np.linalg.norm(decision.direction)), 0.0)
+        self.assertEqual(decision.patch_heat, 0.0)
+        self.assertEqual(decision.coverage_count, 0)
+        self.assertFalse(
+            self.direction.is_blocked_by_came_from(
+                decision.direction,
+                np.array([1.0, 0.0], dtype=np.float32),
+            )
+        )
+
+    def test_came_from_remains_hard_when_every_patch_has_coverage(self):
+        numerical_heatmap = np.zeros((101, 101), dtype=np.float32)
+        numerical_heatmap[50, 20] = 100
+        came_from = np.array([-1.0, 0.0], dtype=np.float32)
+
+        direction = self.direction.get_direction(
+            numerical_heatmap,
+            came_from=came_from,
+            coverage_directions=[
+                np.array([1.0, 0.0], dtype=np.float32),
+                np.array([-1.0, 0.0], dtype=np.float32),
+                np.array([0.0, 1.0], dtype=np.float32),
+                np.array([0.0, -1.0], dtype=np.float32),
+            ],
+        )
+
+        self.assertFalse(
+            self.direction.is_blocked_by_came_from(
+                direction,
+                came_from,
+            )
         )
 
     def test_forbidden_cone_removes_the_entire_patch(self):

@@ -70,6 +70,7 @@ class PriorityFrameResult:
     heatmap_only: np.ndarray | None
     numerical_heatmap: np.ndarray | None
     direction: np.ndarray | None
+    direction_mode: str
     came_from: np.ndarray | None
     output_frame: np.ndarray | None
     latency_seconds: dict[str, float]
@@ -92,6 +93,9 @@ class FramePacket:
 
 
 class PriorityMapRunner:
+    COVERAGE_NODE_LIMIT = 50
+    DIRECTION_MINIMUM_HEAT = 1.0
+
     def __init__(
         self,
         image_folder: str | Path | None = None,
@@ -525,30 +529,48 @@ class PriorityMapRunner:
             and frame.altitude is not None
         )
         if has_gps:
-            current_position = np.array(
-                [frame.easting, frame.northing],
-                dtype=np.float32,
-            )
-        else:
-            height, width = image.shape[:2]
-            current_position = np.array(
-                [
-                    width / 2.0 + self.flow_localizer.cumulative_transform_dx,
-                    height / 2.0 + self.flow_localizer.cumulative_transform_dy,
-                ],
-                dtype=np.float32,
-            )
+            return []
+
+        height, width = image.shape[:2]
+        viewport_left = float(
+            self.flow_localizer.cumulative_transform_dx
+        )
+        viewport_top = float(
+            self.flow_localizer.cumulative_transform_dy
+        )
+        current_position = np.array(
+            [
+                viewport_left + width / 2.0,
+                viewport_top + height / 2.0,
+            ],
+            dtype=np.float32,
+        )
 
         node_positions = self.graph_builder.get_nearby_node_positions(
             current_position,
-            radius=200,
-            limit=10,
+            radius=float(np.hypot(width, height)),
+            limit=self.COVERAGE_NODE_LIMIT,
         )
         directions = []
         for node_position in node_positions:
-            delta = np.asarray(node_position, dtype=np.float32) - current_position
-            if not has_gps:
-                delta[1] *= -1
+            node_position = np.asarray(node_position, dtype=np.float32)
+            if (
+                node_position.shape != (2,)
+                or not np.all(np.isfinite(node_position))
+            ):
+                continue
+
+            screen_x = float(node_position[0] - viewport_left)
+            screen_y = float(node_position[1] - viewport_top)
+            is_on_screen = (
+                0.0 <= screen_x < width
+                and 0.0 <= screen_y < height
+            )
+            if is_on_screen:
+                continue
+
+            delta = node_position - current_position
+            delta[1] *= -1
             distance = np.linalg.norm(delta)
             if distance > 0:
                 directions.append(delta / distance)
@@ -604,6 +626,7 @@ class PriorityMapRunner:
                 heatmap_only=None,
                 numerical_heatmap=None,
                 direction=None,
+                direction_mode="hold",
                 came_from=None,
                 output_frame=None,
                 latency_seconds={
@@ -701,14 +724,57 @@ class PriorityMapRunner:
             image,
             clustered,
         )
+        numerical_heatmap = np.asarray(
+            numerical_heatmap
+            if numerical_heatmap is not None
+            else np.zeros(image.shape[:2], dtype=np.float32),
+            dtype=np.float32,
+        )
+        maximum_heat = float(
+            np.max(numerical_heatmap)
+            if numerical_heatmap.size > 0
+            else 0.0
+        )
+        coverage_directions = self._coverage_directions(frame, image)
+        navigation_heatmap = (
+            numerical_heatmap
+            if maximum_heat >= self.DIRECTION_MINIMUM_HEAT
+            else np.zeros_like(numerical_heatmap)
+        )
+        direction_decision = self.direction.get_decision(
+            navigation_heatmap,
+            came_from=came_from,
+            coverage_directions=coverage_directions,
+        )
+        raw_direction = direction_decision.direction
         direction = self._smooth_vector(
-            self.direction.get_direction(
-                numerical_heatmap,
-                came_from,
-            ),
+            raw_direction,
             "_direction_ema",
             max_turn_degrees=self.max_direction_turn_degrees,
         )
+        if (
+            direction is not None
+            and np.linalg.norm(direction) > 0
+            and (
+                self.direction.is_blocked_by_came_from(
+                    direction,
+                    came_from,
+                )
+                or self.direction.coverage_count(
+                    direction,
+                    coverage_directions,
+                ) > direction_decision.coverage_count
+            )
+        ):
+            direction = np.asarray(raw_direction, dtype=np.float32)
+            self._direction_ema = direction.copy()
+
+        if direction is None or np.linalg.norm(direction) == 0:
+            direction_mode = "hold"
+        elif direction_decision.patch_heat > 0:
+            direction_mode = "target"
+        else:
+            direction_mode = "coverage"
         if heatmap_text is not None and heatmap_only is not None:
             out = heatmap_text
             self.heatmap_video_output.handle_frame(
@@ -806,6 +872,7 @@ class PriorityMapRunner:
             heatmap_only=heatmap_only,
             numerical_heatmap=numerical_heatmap,
             direction=direction,
+            direction_mode=direction_mode,
             came_from=came_from,
             output_frame=out,
             latency_seconds={
