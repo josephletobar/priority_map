@@ -38,12 +38,6 @@ from priority_map.modules.geospatial import (
 load_dotenv()
 
 
-# DEFAULT_IMAGE_FOLDER = Path(r"D:\UAV_VisLoc_dataset\05\drone")
-# DEFAULT_IMAGE_FOLDER = Path(r"D:\Train\Train\query_images")
-# DEFAULT_IMAGE_FOLDER = Path(r"D:\dronevid2")
-# DEFAULT_IMAGE_FOLDER = Path(r"D:\rtereg") 
-DEFAULT_IMAGE_FOLDER = None
-
 def default_output_dir() -> Path:
     return Path("examples") / time.strftime("%Y-%m-%d_%H-%M-%S")
 
@@ -104,7 +98,7 @@ class PriorityMapRunner:
 
     def __init__(
         self,
-        image_folder: str | Path | None = None,
+        image_folder: str | Path | None,
         output_dir: str | Path | None = None,
         task="Find cars",
         debrief: str | None = None,
@@ -114,7 +108,8 @@ class PriorityMapRunner:
         blur_spread=config.BLUR_SPREAD,
         dilation_scale=config.DILATION_SCALE,
         max_image_edge=config.MAX_IMAGE_EDGE,
-        sam_model_path=config.SAM_MODEL_PATH,
+        *,
+        sam_model_path: str | Path,
         debug=False,
         record=True,
         panoramic=False,
@@ -127,7 +122,7 @@ class PriorityMapRunner:
         persist_artifacts: bool = True,
         require_cesium_georeference: bool = False,
     ):
-        self.dataset_root = Path(image_folder) if image_folder is not None else DEFAULT_IMAGE_FOLDER
+        self.dataset_root = Path(image_folder) if image_folder is not None else None
         self.gps_csv_path = Path(gps_csv) if gps_csv is not None else None
         self.camera_intrinsics_path = Path(camera_intrinsics) if camera_intrinsics is not None else None
         self.task = task

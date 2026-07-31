@@ -8,7 +8,7 @@ from priority_map.modules.GraphAgent import review_priority_map_db
 
 
 def run_priority_map(
-    image_folder: str | Path | None = None,
+    image_folder: str | Path,
     output_dir: str | Path | None = None,
     task: str = "Find cars",
     debrief: str | None = None,
@@ -18,7 +18,8 @@ def run_priority_map(
     blur_spread: float = config.BLUR_SPREAD,
     dilation_scale: float = config.DILATION_SCALE,
     max_image_edge: int | None = config.MAX_IMAGE_EDGE,
-    sam_model_path: str | Path = config.SAM_MODEL_PATH,
+    *,
+    sam_model_path: str | Path,
     debug: bool = False,
     record: bool = True,
     panoramic: bool = False,

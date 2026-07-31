@@ -41,7 +41,12 @@ class RunnerFrameInputTests(unittest.TestCase):
             patch("priority_map.runner.VideoOutput") as video_output,
             patch("priority_map.runner.PanoramaBuilder"),
         ):
-            runner = PriorityMapRunner(output_dir=temp_dir, record=False)
+            runner = PriorityMapRunner(
+                image_folder=None,
+                output_dir=temp_dir,
+                sam_model_path="/models/custom-sam.pt",
+                record=False,
+            )
             try:
                 self.assertIsNone(runner.dataset_root)
                 self.assertIsNone(runner.query_images_dir)

@@ -47,7 +47,8 @@ class Segment():
         self,
         debug=False,
         sam_thresh=config.SAM_TRESH,
-        sam_model_path=config.SAM_MODEL_PATH,
+        *,
+        sam_model_path,
     ):
 
         self.segmentations = []

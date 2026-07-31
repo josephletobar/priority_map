@@ -3,7 +3,7 @@
 ## Quick run example
 
 ```bash
-priority-map --img-folder path\to\images --scene-model provider:model --task "your task"
+priority-map --img-folder path\to\images --scene-model provider:model --sam-model-path path\to\sam3.pt --task "your task"
 ```
 
 ## Complete CLI reference
@@ -11,29 +11,35 @@ priority-map --img-folder path\to\images --scene-model provider:model --task "yo
 ### `priority-map`
 
 ```text
-priority-map [IMAGE_FOLDER] --scene-model PROVIDER:MODEL [OPTIONS]
+priority-map --img-folder PATH --scene-model PROVIDER:MODEL --sam-model-path PATH [OPTIONS]
 ```
 
-| Argument | Required | Default | Description |
-| --- | --- | --- | --- |
-| `IMAGE_FOLDER` | No | None | Positional folder containing the input images. |
-| `--img-folder PATH` | No | None | Input-image folder; overrides positional `IMAGE_FOLDER`. |
-| `--scene-model PROVIDER:MODEL` | Yes | None | Scene VLM provider and provider-owned model identifier. Supported providers are `openai`, `openrouter`, and `ollama`. |
-| `--task TEXT` | No | `Find cars` | Mission objective used to score scene relevance. |
-| `--debrief TEXT` | No | None | Additional mission context appended to the task for scene understanding. |
-| `--gps PATH`, `--gps-csv PATH` | No | None | Per-frame GPS/pose CSV whose `name` column matches image filenames. |
-| `--camera-intrinsics PATH` | No | None | Camera-intrinsics file retained by the runner for future localization work; currently unused. |
-| `--output-dir PATH` | No | `examples/YYYY-MM-DD_HH-MM-SS` | Directory for videos, heatmaps, observations, and `graph.db`. |
-| `--mask [LABEL ...]` | No | Empty | Include side previews for the listed segmentation labels. Matching is case-insensitive. |
-| `--sam-step INTEGER` | No | `60` | Run scene understanding and fresh SAM segmentation every Nth frame. |
-| `--sam-thresh FLOAT` | No | `0.25` | SAM prediction confidence threshold. |
-| `--sam-model-path PATH` | No | `models/sam3.pt` | Path to the SAM model weights. |
-| `--blur-spread FLOAT` | No | `101.0` | Base heatmap blur/spread amount; larger values produce broader, smoother heat. |
-| `--dilation-scale FLOAT` | No | `1.0` | Multiplier for heatmap dilation; `1.0` preserves the standard behavior. |
-| `--max-image-edge INTEGER` | No | `640` | Resize inputs so their longest edge does not exceed this value; use `0` to disable resizing. |
-| `--debug` | No | Off | Show diagnostic composite and SAM windows instead of the single normal heatmap preview, and print debug timing/output. |
-| `--panoramic` | No | Off | Enable experimental panorama and heatmap-panorama generation. |
-| `-h`, `--help` | No | — | Print the CLI help and exit. |
+#### Required arguments
+
+| Argument | Description |
+| --- | --- |
+| `--img-folder PATH` | Folder containing the input images. |
+| `--scene-model PROVIDER:MODEL` | Scene VLM provider and provider-owned model identifier. Supported providers are `openai`, `openrouter`, and `ollama`. |
+| `--sam-model-path PATH` | Path folder that SAM model weights. `sam3.pt` |
+
+#### Optional arguments
+
+| Argument | Default | Description |
+| --- | --- | --- |
+| `--task TEXT` | `Find cars` | Mission objective used to score scene relevance. |
+| `--debrief TEXT` | None | Additional mission context appended to the task for scene understanding. |
+| `--gps PATH`, `--gps-csv PATH` | None | Per-frame GPS/pose CSV whose `name` column matches image filenames. |
+| `--camera-intrinsics PATH` | None | Camera-intrinsics file retained by the runner for future localization work; currently unused. |
+| `--output-dir PATH` | `examples/YYYY-MM-DD_HH-MM-SS` | Directory for videos, heatmaps, observations, and `graph.db`. |
+| `--sam-step INTEGER` | `60` | Run scene understanding and fresh SAM segmentation every Nth frame. |
+| `--sam-thresh FLOAT` | `0.25` | SAM prediction confidence threshold. |
+| `--blur-spread FLOAT` | `101.0` | Base heatmap blur/spread amount; larger values produce broader, smoother heat. |
+| `--dilation-scale FLOAT` | `1.0` | Multiplier for heatmap dilation; `1.0` preserves the standard behavior. |
+| `--max-image-edge INTEGER` | `640` | Resize inputs so their longest edge does not exceed this value; use `0` to disable resizing. |
+| `--debug` | Off | Show diagnostic composite and SAM windows instead of the single normal heatmap preview, and print debug timing/output. |
+| `--panoramic` | Off | Enable experimental panorama and heatmap-panorama generation. |
+| `-h`, `--help` | — | Print the CLI help and exit. |
+
 
 ### `priority-map-agent`
 
@@ -41,27 +47,36 @@ priority-map [IMAGE_FOLDER] --scene-model PROVIDER:MODEL [OPTIONS]
 priority-map-agent DB_PATH --update TEXT [OPTIONS]
 ```
 
-| Argument | Required | Default | Description |
-| --- | --- | --- | --- |
-| `DB_PATH` | Yes | None | Path to an existing PriorityMap `graph.db`. |
-| `--update TEXT` | Yes | None | Freeform task update or additional context used to reprioritize graph nodes. |
-| `--original-task TEXT` | No | Stored database value | Backfill the original mission task when reviewing an older database. |
-| `--debug` | No | Off | Print model and graph-agent debugging details. |
-| `-h`, `--help` | No | — | Print the CLI help and exit. |
+#### Required arguments
+
+| Argument | Description |
+| --- | --- |
+| `DB_PATH` | Path to an existing PriorityMap `graph.db`. |
+| `--update TEXT` | Freeform task update or additional context used to reprioritize graph nodes. |
+
+#### Optional arguments
+
+| Argument | Default | Description |
+| --- | --- | --- |
+| `--original-task TEXT` | Stored database value | Backfill the original mission task when reviewing an older database. |
+| `--debug` | Off | Print model and graph-agent debugging details. |
+| `-h`, `--help` | — | Print the CLI help and exit. |
 
 ## Process Frames as They Arrive
 
 Using this for live autonomy
 
 `PriorityMapRunner` can be initialized without an image folder and reused for
-in-memory video frames:
+in-memory video frames. Its `sam_model_path` argument is required:
 
 ```python
 from priority_map.runner import PriorityMapRunner
 
 runner = PriorityMapRunner(
+    image_folder=None,
     task="Find cars",
     scene_model="openai:gpt-5.4",
+    sam_model_path="models/sam3.pt",
     record=False,
 )
 try:
@@ -107,25 +122,25 @@ command.
 Plain image folder, using optical-flow localization:
 
 ```bash
-priority-map --img-folder D:\Train\Train\query_images --scene-model openai:gpt-5.4 --task "Find cars"
+priority-map --img-folder D:\Train\Train\query_images --scene-model openai:gpt-5.4 --sam-model-path models\sam3.pt --task "Find cars"
 ```
 
 Image folder with per-frame GPS/pose metadata:
 
 ```bash
-priority-map --img-folder D:\Train\Train\query_images --gps D:\Train\Train\query.csv --scene-model openai:gpt-5.4 --task "Find cars"
+priority-map --img-folder D:\Train\Train\query_images --gps D:\Train\Train\query.csv --scene-model openai:gpt-5.4 --sam-model-path models\sam3.pt --task "Find cars"
 ```
 
 With an explicit output folder:
 
 ```bash
-priority-map --img-folder D:\Train\Train\query_images --gps D:\Train\Train\query.csv --output-dir examples\car_search --scene-model openai:gpt-5.4 --task "Find cars"
+priority-map --img-folder D:\Train\Train\query_images --gps D:\Train\Train\query.csv --output-dir examples\car_search --scene-model openai:gpt-5.4 --sam-model-path models\sam3.pt --task "Find cars"
 ```
 
 With debug windows:
 
 ```bash
-priority-map --img-folder D:\Train\Train\query_images --gps D:\Train\Train\query.csv --scene-model openai:gpt-5.4 --debug --task "Find cars"
+priority-map --img-folder D:\Train\Train\query_images --gps D:\Train\Train\query.csv --scene-model openai:gpt-5.4 --sam-model-path models\sam3.pt --debug --task "Find cars"
 ```
 
 ## Review an existing graph DB
@@ -148,8 +163,8 @@ priority-map-agent examples\car_search\graph.db --original-task "original task" 
 providers are `openai`, `openrouter`, and `ollama`:
 
 ```bash
-priority-map --img-folder D:\Train\Train\query_images --scene-model openai:gpt-5.4 --task "Find cars"
-priority-map --img-folder D:\Train\Train\query_images --scene-model openrouter:google/gemma-4-31b-it --task "Find cars"
+priority-map --img-folder D:\Train\Train\query_images --scene-model openai:gpt-5.4 --sam-model-path models\sam3.pt --task "Find cars"
+priority-map --img-folder D:\Train\Train\query_images --scene-model openrouter:google/gemma-4-31b-it --sam-model-path models\sam3.pt --task "Find cars"
 ```
 
 For local inference, start Ollama and ensure the model you want to use is
@@ -157,7 +172,7 @@ installed on that device, then select it with the same format:
 
 ```bash
 ollama pull YOUR_VISION_MODEL
-priority-map --img-folder D:\Train\Train\query_images --scene-model ollama:YOUR_VISION_MODEL --task "Find cars"
+priority-map --img-folder D:\Train\Train\query_images --scene-model ollama:YOUR_VISION_MODEL --sam-model-path models\sam3.pt --task "Find cars"
 ```
 
 The application validates the provider name only. The model identifier is sent

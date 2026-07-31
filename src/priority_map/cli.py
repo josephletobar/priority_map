@@ -8,14 +8,11 @@ from priority_map.config import params as config
 def parse_args(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "image_folder",
-        nargs="?",
-        help="Folder of images to process.",
-    )
-    parser.add_argument(
         "--img-folder",
         dest="img_folder",
-        help="Folder of images to process. Overrides the positional image_folder.",
+        required=True,
+        metavar="PATH",
+        help="Folder of images to process.",
     )
     parser.add_argument(
         "--gps",
@@ -46,7 +43,12 @@ def parse_args(argv=None):
         default=config.DILATION_SCALE,
         help="Scale factor for heatmap dilation intensity (1.0 preserves default behavior).",
     )
-    parser.add_argument("--sam-model-path", default=config.SAM_MODEL_PATH)
+    parser.add_argument(
+        "--sam-model-path",
+        required=True,
+        metavar="PATH",
+        help="Path to the SAM model weights.",
+    )
     parser.add_argument(
         "--scene-model",
         required=True,
@@ -76,10 +78,9 @@ def parse_args(argv=None):
 def main(argv=None):
     t0 = time.perf_counter()
     args = parse_args(argv)
-    image_folder = args.img_folder or args.image_folder
 
     result = run_priority_map(
-        image_folder=image_folder,
+        image_folder=args.img_folder,
         output_dir=args.output_dir,
         task=args.task,
         debrief=args.debrief,

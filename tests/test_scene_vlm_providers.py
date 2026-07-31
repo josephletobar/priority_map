@@ -67,12 +67,37 @@ class SceneModelConfigTests(unittest.TestCase):
             with self.subTest(value=value), self.assertRaises(ValueError):
                 parse_scene_model(value)
 
-    def test_cli_requires_provider_model_and_preserves_the_value(self):
+    def test_cli_requires_provider_and_sam_models_and_preserves_the_values(self):
         with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
             parse_args([])
 
-        args = parse_args(["--scene-model", "ollama:custom/model:q4"])
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            parse_args([
+                "--img-folder",
+                "/images",
+                "--scene-model",
+                "ollama:custom/model:q4",
+            ])
+
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            parse_args([
+                "--scene-model",
+                "ollama:custom/model:q4",
+                "--sam-model-path",
+                "/models/custom-sam.pt",
+            ])
+
+        args = parse_args([
+            "--img-folder",
+            "/images",
+            "--scene-model",
+            "ollama:custom/model:q4",
+            "--sam-model-path",
+            "/models/custom-sam.pt",
+        ])
+        self.assertEqual(args.img_folder, "/images")
         self.assertEqual(args.scene_model, "ollama:custom/model:q4")
+        self.assertEqual(args.sam_model_path, "/models/custom-sam.pt")
 
 
 class ProviderRegistryTests(unittest.TestCase):
