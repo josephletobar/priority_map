@@ -28,6 +28,11 @@ class Segmentation:
     score: float
     centroid: tuple[int, int] | None = None
     geo_pos: tuple[float, float] | None = None
+    longitude: float | None = None
+    latitude: float | None = None
+    ground_height_m: float | None = None
+    coverage_radius_m: float | None = None
+    observed_frame: int | None = None
 
 
 @dataclass
@@ -202,6 +207,11 @@ class Segment():
                 t0 = time.perf_counter()
                 if getattr(self.predictor, "model", None) is None:
                     self.predictor.setup_model(verbose=self.debug)
+                # Ultralytics SAM3SemanticPredictor currently expects every SAM
+                # model to expose this threshold, but SAM3SemanticModel does not
+                # define it. SAM mask logits use zero as the standard cutoff.
+                if not hasattr(self.predictor.model, "mask_threshold"):
+                    self.predictor.model.mask_threshold = 0.0
                 results = self.predictor(sam_image, text=prompts)
                 sam3_seconds = time.perf_counter() - t0
                 if results:

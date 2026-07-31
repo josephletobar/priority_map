@@ -7,6 +7,7 @@ from openai import OpenAI
 
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 OLLAMA_BASE_URL = "http://localhost:11434/v1"
+MAX_OUTPUT_TOKENS = 1200
 
 
 class SceneVlmProvider(Protocol):
@@ -23,7 +24,7 @@ class SceneModelConfig:
 
 class _ResponsesProvider:
     def analyze(self, model: str, prompt: str, image_base64: str) -> str:
-        response = self.client.responses.create(
+        request_options = dict(
             model=model,
             input=[{
                 "role": "user",
@@ -32,17 +33,33 @@ class _ResponsesProvider:
                     {
                         "type": "input_image",
                         "image_url": f"data:image/jpeg;base64,{image_base64}",
-                        "detail": "high",
+                        "detail": getattr(self, "image_detail", "low"),
                     },
                 ],
             }],
+            max_output_tokens=MAX_OUTPUT_TOKENS,
         )
+        request_options.update(self._extra_request_options())
+        response = self.client.responses.create(**request_options)
         return response.output_text
+
+    def _extra_request_options(self):
+        return {}
 
 
 class OpenAIProvider(_ResponsesProvider):
     def __init__(self):
         self.client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        self.image_detail = os.getenv("SCENE_IMAGE_DETAIL", "low")
+        self.reasoning_effort = os.getenv("SCENE_REASONING_EFFORT", "none")
+
+    def _extra_request_options(self):
+        return {
+            "reasoning": {
+                "effort": getattr(self, "reasoning_effort", "none"),
+            },
+            "text": {"verbosity": "low"},
+        }
 
 
 class OpenRouterProvider(_ResponsesProvider):
@@ -51,6 +68,7 @@ class OpenRouterProvider(_ResponsesProvider):
             api_key=os.getenv("OPENROUTER_API_KEY"),
             base_url=OPENROUTER_BASE_URL,
         )
+        self.image_detail = os.getenv("SCENE_IMAGE_DETAIL", "low")
 
 
 class OllamaProvider:
@@ -74,6 +92,7 @@ class OllamaProvider:
                 ],
             }],
             response_format={"type": "json_object"},
+            max_tokens=MAX_OUTPUT_TOKENS,
             stream=False,
         )
         content = response.choices[0].message.content

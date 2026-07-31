@@ -17,6 +17,11 @@ class ClusteredSegmentation:
     geo_pos: tuple[float, float]  # global position (centroid + accumulated transform)
     color: tuple[int, int, int] | None = None  # color for visualization (optional)
     source_label: str | None = None  # original VLM label used to resolve edge intents
+    longitude: float | None = None
+    latitude: float | None = None
+    ground_height_m: float | None = None
+    coverage_radius_m: float | None = None
+    observed_frame: int | None = None
 
 def cluster_segmentations(segmentations, distance_threshold=config.SEGMENTATION_CLUSTER_DISTANCE_THRESHOLD):
     """Cluster segmentations by label and spatial proximity.
@@ -61,7 +66,41 @@ def cluster_segmentations(segmentations, distance_threshold=config.SEGMENTATION_
         # Create ClusteredSegmentation for each cluster
         for cluster_segs in clusters_dict.values():
             avg_centroid = tuple(np.mean([seg.centroid for seg in cluster_segs], axis=0).astype(int))
-            avg_geo_pos = tuple(np.mean([seg.geo_pos for seg in cluster_segs if seg.geo_pos is not None], axis=0))
+            valid_geo_positions = [
+                seg.geo_pos
+                for seg in cluster_segs
+                if seg.geo_pos is not None
+            ]
+            avg_geo_pos = (
+                tuple(np.mean(valid_geo_positions, axis=0))
+                if valid_geo_positions
+                else avg_centroid
+            )
+            valid_longitudes = [
+                seg.longitude
+                for seg in cluster_segs
+                if seg.longitude is not None
+            ]
+            valid_latitudes = [
+                seg.latitude
+                for seg in cluster_segs
+                if seg.latitude is not None
+            ]
+            valid_ground_heights = [
+                seg.ground_height_m
+                for seg in cluster_segs
+                if seg.ground_height_m is not None
+            ]
+            valid_coverage_radii = [
+                seg.coverage_radius_m
+                for seg in cluster_segs
+                if seg.coverage_radius_m is not None
+            ]
+            observed_frames = [
+                seg.observed_frame
+                for seg in cluster_segs
+                if seg.observed_frame is not None
+            ]
             score = cluster_segs[0].score
             count = len(cluster_segs)
             merged_mask = np.logical_or.reduce([seg.mask for seg in cluster_segs]).astype(np.uint8)
@@ -74,6 +113,27 @@ def cluster_segmentations(segmentations, distance_threshold=config.SEGMENTATION_
                 mask=merged_mask,
                 geo_pos=avg_geo_pos,
                 source_label=label,
+                longitude=(
+                    float(np.mean(valid_longitudes))
+                    if valid_longitudes
+                    else None
+                ),
+                latitude=(
+                    float(np.mean(valid_latitudes))
+                    if valid_latitudes
+                    else None
+                ),
+                ground_height_m=(
+                    float(np.mean(valid_ground_heights))
+                    if valid_ground_heights
+                    else None
+                ),
+                coverage_radius_m=(
+                    float(np.mean(valid_coverage_radii))
+                    if valid_coverage_radii
+                    else None
+                ),
+                observed_frame=max(observed_frames, default=None),
             ))
 
             
@@ -194,6 +254,49 @@ def semantic_cluster_from_members(cluster_segs):
         mask=merged_mask,
         geo_pos=avg_geo_pos,
         color=None,
+        longitude=(
+            float(np.mean([
+                seg.longitude
+                for seg in cluster_segs
+                if seg.longitude is not None
+            ]))
+            if any(seg.longitude is not None for seg in cluster_segs)
+            else None
+        ),
+        latitude=(
+            float(np.mean([
+                seg.latitude
+                for seg in cluster_segs
+                if seg.latitude is not None
+            ]))
+            if any(seg.latitude is not None for seg in cluster_segs)
+            else None
+        ),
+        ground_height_m=(
+            float(np.mean([
+                seg.ground_height_m
+                for seg in cluster_segs
+                if seg.ground_height_m is not None
+            ]))
+            if any(seg.ground_height_m is not None for seg in cluster_segs)
+            else None
+        ),
+        coverage_radius_m=max(
+            (
+                float(seg.coverage_radius_m)
+                for seg in cluster_segs
+                if seg.coverage_radius_m is not None
+            ),
+            default=None,
+        ),
+        observed_frame=max(
+            (
+                int(seg.observed_frame)
+                for seg in cluster_segs
+                if seg.observed_frame is not None
+            ),
+            default=None,
+        ),
     )
 
 

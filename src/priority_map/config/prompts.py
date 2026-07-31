@@ -30,33 +30,14 @@ For each visible category, output:
   If a label comes from the mission objective, use only the concrete target category,
   not the full mission wording.
 
-- "reasoning": a brief interpretability explanation for why you chose this label.
-  First consider spatial context: where this category appears in the scene, what
-  surrounds it, whether it is isolated or embedded in other categories, and how
-  those spatial relationships change its mission relevance. Also consider the
-  recent graph context from previous frames: whether recent nearby labels and
-  edges suggest a broader environment or pattern that should raise, lower, or
-  stabilize this label's priority. Then explain why this category belongs in the
-  scene dictionary, how it relates to the mission objective, and what makes it
-  more or less useful than the other selected categories. This is not a visual
-  confidence explanation. Do not merely say the category is visible.
-  Give balanced reasoning: include why the score is justified, and also why it is
-  not substantially higher or lower.
-  Explicitly state how the recent graph context affected this score, or state that
-  it did not materially affect this score.
-
 - "score": relevance score from 0-100 for the mission objective.
-
-  Choose the score only after writing the reasoning. The score should be the
-  conclusion of the reasoning, not a separate first impression. In each label
-  object, output "reasoning" first and "score" second.
 
   Consider the entire scene and how visible categories relate to one another spatially.
   Score categories based on how useful they are for accomplishing the mission objective.
   Prioritize practical likelihood over theoretical possibility.
   The score represents relevance to the mission objective, not visual confidence.
 
-  Prioritize distinct, localized evidence of the target over common scene clutter; 
+  Prioritize distinct, localized evidence of the target over common scene clutter;
   assign low priority to widespread background elements unless they contain specific target-like cues.
 
 - "edges": optional relationships originating from this label.
@@ -64,7 +45,7 @@ For each visible category, output:
   to connect to an existing node from recent graph context. The "text" must be a
   concise relationship label containing only one or two lowercase words joined
   by a single underscore. Do not put explanations, evidence, or full sentences
-  in edge text; put that detail in the source label's "reasoning" field instead.
+  in edge text.
   Model edges must complement the numeric coordinate graph rather than translate
   it into words. Do not create an edge merely because two entities are nearby,
   adjacent, co-located, separated by some distance, or positioned in a particular
@@ -77,11 +58,11 @@ For each visible category, output:
   when no such relationship is clearly supported.
 
 Scoring guide:
-- 0 = not relevant
-- 25 = weak context
-- 50 = useful
-- 75 = highly useful
-- 100 = the concrete mission target category, or directly mission-critical visible evidence
+- 0 = not relevant to the goal
+- 25 = weak context to the goal being present
+- 50 = useful to achieving the goal
+- 75 = highly useful to achieving the goal
+- 100 = reserved exclusively for a clearly visible instance of the exact goal object itself. Never assign 100 to context, clues, proxies, containers, locations, related objects, or other mission-critical evidence.
 
 Rules:
 - Include all major visible categories
@@ -95,8 +76,6 @@ Rules:
 - Prioritize probability over possibility
 - Use global spatial context when assigning scores, including adjacency, enclosure, isolation, clustering, and scene layout
 - Use recent graph context when it changes likely broader environment, continuity, or score stability
-- For each label, reason about spatial context and mission relevance first, then output the score after that reasoning
-- Each reasoning field must include both positive and limiting factors for the score unless the score is exactly 0 or 100
 - Edge relationship types are freeform, but their text must use the compact one-
   or two-word label format described above
 - Never use model edges as natural-language restatements of coordinate geometry
@@ -107,7 +86,6 @@ Placeholder schema only:
 {{
     "labels": {{
         "<simple_localization_label>": {{
-            "reasoning": "<interpretability explanation written before choosing the score>",
             "score": <integer_0_to_100>,
             "edges": [
                 {{"to_label": "<another_current_label>", "text": "<compact_relationship_label>"}},

@@ -7,8 +7,9 @@ from unittest.mock import MagicMock, patch
 import cv2
 import numpy as np
 
-from priority_map.modules.Direction import Direction
+from priority_map.modules.Direction import Direction, DirectionDecision
 from priority_map.modules.drone_motion import DroneMotion
+from priority_map.modules.geospatial import CesiumFrameMetadata
 from priority_map.runner import PriorityMapRunner
 
 
@@ -22,6 +23,8 @@ class RunnerFrameInputTests(unittest.TestCase):
         runner.direction = Direction()
         runner.drone_motion = DroneMotion()
         runner.vector_ema_alpha = 0.3
+        runner.max_direction_turn_degrees = 12.0
+        runner.persist_artifacts = False
         runner._direction_ema = None
         runner._came_from_ema = None
         return runner
@@ -110,10 +113,13 @@ class RunnerFrameInputTests(unittest.TestCase):
         runner.drone_motion = MagicMock()
         runner.drone_motion.get_came_from.return_value = came_from
         runner.direction = MagicMock()
-        runner.direction.get_direction.return_value = np.array(
-            [1.0, 0.0],
-            dtype=np.float32,
+        runner.direction.get_decision.return_value = DirectionDecision(
+            direction=np.array([1.0, 0.0], dtype=np.float32),
+            patch_heat=100.0,
+            coverage_count=0,
         )
+        runner.direction.is_blocked_by_came_from.return_value = False
+        runner.direction.coverage_count.return_value = 0
         runner.flow_localizer = MagicMock()
         runner.flow_localizer.cumulative_transform_dx = 0.0
         runner.flow_localizer.cumulative_transform_dy = 0.0
@@ -132,7 +138,7 @@ class RunnerFrameInputTests(unittest.TestCase):
         runner.heatmap_video_output = MagicMock()
         runner.heatmap_video_output.handle_frame.return_value = True
         runner.graph_builder = MagicMock()
-        runner.graph_builder.get_nearby_node_positions.return_value = [
+        runner.graph_builder.get_recent_node_positions.return_value = [
             (2.5, 1.5),
         ]
         runner.last_graph_frame = None
@@ -159,58 +165,42 @@ class RunnerFrameInputTests(unittest.TestCase):
             np.array([1.0, 0.0], dtype=np.float32),
         )
         np.testing.assert_array_equal(result.came_from, came_from)
-        direction_args = runner.direction.get_direction.call_args.args
-        self.assertIs(direction_args[0], numerical_heatmap)
-        np.testing.assert_array_equal(direction_args[1], came_from)
-        self.assertEqual(len(direction_args), 2)
+        self.assertEqual(result.direction_mode, "target")
+        direction_call = runner.direction.get_decision.call_args
+        self.assertIs(direction_call.args[0], numerical_heatmap)
+        np.testing.assert_array_equal(
+            direction_call.kwargs["came_from"],
+            came_from,
+        )
+        self.assertIsNone(
+            direction_call.kwargs["forbidden_directions"],
+        )
         self.assertEqual(result.numerical_heatmap.shape, image.shape[:2])
         self.assertEqual(runner.frames_processed, 8)
+        self.assertFalse(result.goal_found)
 
-    def test_coverage_directions_use_gps_coordinates(self):
-        runner = self.bare_runner()
-        runner.graph_builder = MagicMock()
-        runner.graph_builder.get_nearby_node_positions.return_value = [
-            (20.0, 20.0),
-            (10.0, 30.0),
-        ]
-        frame = SimpleNamespace(
-            easting=10.0,
-            northing=20.0,
-            altitude=100.0,
+    def test_goal_found_requires_an_exact_score_of_100(self):
+        self.assertTrue(
+            PriorityMapRunner._scene_contains_goal(
+                {"car": {"score": 100}},
+            )
         )
-
-        directions = runner._coverage_directions(
-            frame,
-            np.zeros((80, 100, 3), dtype=np.uint8),
+        self.assertTrue(
+            PriorityMapRunner._scene_contains_goal(
+                {"car": {"score": "100"}},
+            )
         )
-
-        np.testing.assert_allclose(directions[0], [1.0, 0.0])
-        np.testing.assert_allclose(directions[1], [0.0, 1.0])
-
-    def test_coverage_directions_flip_flow_image_y(self):
-        runner = self.bare_runner()
-        runner.flow_localizer = SimpleNamespace(
-            cumulative_transform_dx=5.0,
-            cumulative_transform_dy=-3.0,
+        self.assertFalse(
+            PriorityMapRunner._scene_contains_goal(
+                {"road": {"score": 99.99}},
+            )
         )
-        runner.graph_builder = MagicMock()
-        runner.graph_builder.get_nearby_node_positions.return_value = [
-            (65.0, 37.0),
-            (55.0, 47.0),
-        ]
-        frame = SimpleNamespace(
-            easting=None,
-            northing=None,
-            altitude=None,
+        self.assertFalse(
+            PriorityMapRunner._scene_contains_goal(
+                {"invalid": {"score": 101}},
+            )
         )
-
-        directions = runner._coverage_directions(
-            frame,
-            np.zeros((80, 100, 3), dtype=np.uint8),
-        )
-
-        np.testing.assert_allclose(directions[0], [1.0, 0.0])
-        np.testing.assert_allclose(directions[1], [0.0, -1.0])
+        self.assertFalse(PriorityMapRunner._scene_contains_goal(None))
 
     def test_debug_mode_draws_direction_and_came_from_arrows(self):
         runner = self.bare_runner()
@@ -342,6 +332,28 @@ class RunnerFrameInputTests(unittest.TestCase):
         )
 
         np.testing.assert_allclose(reversed_direction, [-1.0, 0.0])
+
+    def test_direction_turn_can_be_hard_limited(self):
+        runner = self.bare_runner()
+        runner.vector_ema_alpha = 1.0
+        runner._smooth_vector(
+            np.array([1.0, 0.0], dtype=np.float32),
+            "_direction_ema",
+            max_turn_degrees=12.0,
+        )
+
+        limited = runner._smooth_vector(
+            np.array([0.0, 1.0], dtype=np.float32),
+            "_direction_ema",
+            max_turn_degrees=12.0,
+        )
+
+        expected_radians = np.deg2rad(12.0)
+        np.testing.assert_allclose(
+            limited,
+            [np.cos(expected_radians), np.sin(expected_radians)],
+            atol=1e-6,
+        )
 
 
 if __name__ == "__main__":

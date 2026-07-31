@@ -30,6 +30,10 @@ from priority_map.modules.object_localizing.localizer import LocalizationContext
 from priority_map.modules.object_localizing.flow_localizer import FlowLocalizer
 from priority_map.modules.object_localizing.gps_localizer import GpsLocalizer
 from priority_map.modules.PanoramaBuilder import PanoramaBuilder
+from priority_map.modules.geospatial import (
+    CesiumFrameMetadata,
+    lonlat_to_local,
+)
 
 load_dotenv()
 
@@ -67,9 +71,12 @@ class PriorityFrameResult:
     image_name: str | None
     image_path: str | None
     frame_index: int | None
+    goal_found: bool
+    georeference_valid: bool
     heatmap_only: np.ndarray | None
     numerical_heatmap: np.ndarray | None
     direction: np.ndarray | None
+    direction_mode: str
     came_from: np.ndarray | None
     output_frame: np.ndarray | None
     latency_seconds: dict[str, float]
@@ -89,9 +96,12 @@ class FramePacket:
     northing: float | None = None
     altitude: float | None = None
     orientation: tuple[float, float, float, float] | None = None
+    cesium_metadata: CesiumFrameMetadata | None = None
 
 
 class PriorityMapRunner:
+    DIRECTION_MINIMUM_HEAT = 1.0
+
     def __init__(
         self,
         image_folder: str | Path | None = None,
@@ -112,6 +122,10 @@ class PriorityMapRunner:
         camera_intrinsics: str | Path | None = None,
         scene_model: str | None = None,
         vector_ema_alpha: float = config.VECTOR_EMA_ALPHA,
+        max_direction_turn_degrees: float = config.MAX_DIRECTION_TURN_DEGREES,
+        exclusion_angle_degrees: float = config.EXCLUSION_ANGLE_DEGREES,
+        persist_artifacts: bool = True,
+        require_cesium_georeference: bool = False,
     ):
         self.dataset_root = Path(image_folder) if image_folder is not None else DEFAULT_IMAGE_FOLDER
         self.gps_csv_path = Path(gps_csv) if gps_csv is not None else None
@@ -128,9 +142,18 @@ class PriorityMapRunner:
         self.sam_model_path = sam_model_path
         self.panoramic = panoramic
         self.debug = debug
+        self.persist_artifacts = persist_artifacts
+        self.require_cesium_georeference = require_cesium_georeference
+        self._geographic_origin = None
         if not 0 < vector_ema_alpha <= 1:
             raise ValueError("vector_ema_alpha must be greater than 0 and at most 1.")
+        if not 0 < max_direction_turn_degrees <= 180:
+            raise ValueError(
+                "max_direction_turn_degrees must be greater than 0 "
+                "and at most 180."
+            )
         self.vector_ema_alpha = vector_ema_alpha
+        self.max_direction_turn_degrees = max_direction_turn_degrees
         self._direction_ema = None
         self._came_from_ema = None
         
@@ -154,7 +177,9 @@ class PriorityMapRunner:
         self.graph_builder = GraphBuilder(output_dir=self.output_dir, debug=debug)
         self.graph_builder.set_original_task(task)
         self.heatmap = Heatmap(blur_spread=blur_spread, dilation_scale=dilation_scale)
-        self.direction = Direction()
+        self.direction = Direction(
+            exclusion_angle_degrees=exclusion_angle_degrees,
+        )
         self.drone_motion = DroneMotion()
         self.flow_localizer = FlowLocalizer()
         self.gps_localizer = GpsLocalizer()
@@ -330,6 +355,7 @@ class PriorityMapRunner:
         northing: float | None = None,
         altitude: float | None = None,
         orientation: tuple[float, float, float, float] | None = None,
+        cesium_metadata: CesiumFrameMetadata | None = None,
     ) -> FramePacket:
         image_path = None
         if isinstance(image, (str, Path)):
@@ -367,9 +393,53 @@ class PriorityMapRunner:
                 else altitude
             ),
             orientation=orientation or self._orientation_from_row(gps_row),
+            cesium_metadata=cesium_metadata,
         )
 
     def _localize_segmentations(self, segmentations, frame, image, flow_transform):
+        cesium_metadata = frame.cesium_metadata
+        if (
+            cesium_metadata is not None
+            and cesium_metadata.is_valid()
+        ):
+            if self._geographic_origin is None:
+                self._geographic_origin = (
+                    cesium_metadata.longitude,
+                    cesium_metadata.latitude,
+                )
+            origin_longitude, origin_latitude = self._geographic_origin
+            coverage_radius_m = cesium_metadata.coverage_radius_m(
+                image.shape,
+                grid_size=5,
+            )
+            for segmentation in segmentations:
+                if segmentation.centroid is None:
+                    continue
+                longitude, latitude = cesium_metadata.project_pixel(
+                    segmentation.centroid,
+                    image.shape,
+                )
+                local_position = lonlat_to_local(
+                    longitude,
+                    latitude,
+                    origin_longitude,
+                    origin_latitude,
+                )
+                segmentation.geo_pos = tuple(local_position)
+                segmentation.longitude = longitude
+                segmentation.latitude = latitude
+                segmentation.ground_height_m = (
+                    cesium_metadata.ground_height_m
+                )
+                segmentation.coverage_radius_m = coverage_radius_m
+                segmentation.observed_frame = frame.frame_index
+            return segmentations
+
+        if getattr(self, "require_cesium_georeference", False):
+            for segmentation in segmentations:
+                segmentation.geo_pos = None
+            return segmentations
+
         curr_pos = (frame.easting, frame.northing, frame.altitude)
         context = LocalizationContext(
             frame=frame,
@@ -428,7 +498,12 @@ class PriorityMapRunner:
             )
         return output
 
-    def _smooth_vector(self, vector, state_attribute):
+    def _smooth_vector(
+        self,
+        vector,
+        state_attribute,
+        max_turn_degrees=None,
+    ):
         if vector is None:
             setattr(self, state_attribute, None)
             return None
@@ -455,47 +530,55 @@ class PriorityMapRunner:
             ema = current
             ema_magnitude = np.linalg.norm(ema)
 
+        previous = getattr(self, state_attribute, None)
+        if (
+            max_turn_degrees is not None
+            and previous is not None
+            and ema_magnitude > 0
+        ):
+            ema = self._limit_vector_turn(
+                previous,
+                ema,
+                max_turn_degrees,
+            )
+            ema_magnitude = np.linalg.norm(ema)
+
         setattr(self, state_attribute, ema)
         if ema_magnitude == 0:
             return np.zeros(2, dtype=np.float32)
         return np.asarray(ema / ema_magnitude, dtype=np.float32)
 
-    def _coverage_directions(self, frame, image):
-        has_gps = (
-            frame.easting is not None
-            and frame.northing is not None
-            and frame.altitude is not None
-        )
-        if has_gps:
-            current_position = np.array(
-                [frame.easting, frame.northing],
-                dtype=np.float32,
-            )
-        else:
-            height, width = image.shape[:2]
-            current_position = np.array(
-                [
-                    width / 2.0 + self.flow_localizer.cumulative_transform_dx,
-                    height / 2.0 + self.flow_localizer.cumulative_transform_dy,
-                ],
-                dtype=np.float32,
-            )
+    def _limit_vector_turn(self, previous, candidate, max_turn_degrees):
+        previous = np.asarray(previous, dtype=np.float32)
+        candidate = np.asarray(candidate, dtype=np.float32)
+        previous_magnitude = np.linalg.norm(previous)
+        candidate_magnitude = np.linalg.norm(candidate)
+        if previous_magnitude == 0 or candidate_magnitude == 0:
+            return candidate
 
-        node_positions = self.graph_builder.get_nearby_node_positions(
-            current_position,
-            radius=200,
-            limit=10,
+        previous = previous / previous_magnitude
+        candidate = candidate / candidate_magnitude
+        dot = float(np.clip(np.dot(previous, candidate), -1.0, 1.0))
+        cross = float(
+            previous[0] * candidate[1] -
+            previous[1] * candidate[0]
         )
-        directions = []
-        for node_position in node_positions:
-            delta = np.asarray(node_position, dtype=np.float32) - current_position
-            if not has_gps:
-                delta[1] *= -1
-            distance = np.linalg.norm(delta)
-            if distance > 0:
-                directions.append(delta / distance)
-        return directions
-    
+        signed_angle = float(np.arctan2(cross, dot))
+        maximum_angle = float(np.deg2rad(max_turn_degrees))
+        if abs(signed_angle) <= maximum_angle:
+            return candidate
+
+        limited_angle = np.copysign(maximum_angle, signed_angle)
+        cosine = np.cos(limited_angle)
+        sine = np.sin(limited_angle)
+        return np.array(
+            [
+                previous[0] * cosine - previous[1] * sine,
+                previous[0] * sine + previous[1] * cosine,
+            ],
+            dtype=np.float32,
+        )
+
     def close(self):
         if self._closed:
             return
@@ -523,6 +606,8 @@ class PriorityMapRunner:
         northing: float | None = None,
         altitude: float | None = None,
         orientation: tuple[float, float, float, float] | None = None,
+        external_forbidden_directions=None,
+        cesium_metadata: CesiumFrameMetadata | None = None,
     ):
         frame_t0 = time.perf_counter()
         if image is None:
@@ -536,6 +621,7 @@ class PriorityMapRunner:
                 northing=northing,
                 altitude=altitude,
                 orientation=orientation,
+                cesium_metadata=cesium_metadata,
             )
         if frame is None:
             total_seconds = time.perf_counter() - frame_t0
@@ -543,9 +629,12 @@ class PriorityMapRunner:
                 image_name=None,
                 image_path=None,
                 frame_index=None,
+                goal_found=False,
+                georeference_valid=False,
                 heatmap_only=None,
                 numerical_heatmap=None,
                 direction=None,
+                direction_mode="hold",
                 came_from=None,
                 output_frame=None,
                 latency_seconds={
@@ -558,6 +647,10 @@ class PriorityMapRunner:
             )
 
         image = frame.image
+        georeference_valid = bool(
+            frame.cesium_metadata is not None
+            and frame.cesium_metadata.is_valid()
+        )
         out = image
         vlm_seconds = 0.0
         sam3_seconds = 0.0
@@ -571,6 +664,7 @@ class PriorityMapRunner:
 
         scene_dict = None
         scene_edge_intents = []
+        goal_found = False
         recent_graph_context = {"nodes": [], "spatial_edges": [], "model_edges": []}
         if self.should_run_sam(frame):
             vlm_t0 = time.perf_counter()
@@ -583,6 +677,7 @@ class PriorityMapRunner:
             if scene_result is not None:
                 scene_dict = scene_result.labels
                 scene_edge_intents = scene_result.edge_intents
+                goal_found = self._scene_contains_goal(scene_dict)
             vlm_seconds = time.perf_counter() - vlm_t0
         # print(scene_dict)
 
@@ -609,27 +704,29 @@ class PriorityMapRunner:
 
         clustered = cluster_segmentations(segmentations)
 
-        # Set Where to Save Observations CSV
-        csv_path = self.observations_csv
-        if not csv_path.exists():
-            with csv_path.open("w", newline="") as f:
+        heatmap_images_dir = None
+        if self.persist_artifacts:
+            # Set Where to Save Observations CSV
+            csv_path = self.observations_csv
+            if not csv_path.exists():
+                with csv_path.open("w", newline="") as f:
+                    writer = csv.writer(f)
+                    writer.writerow(["image_name", "label", "centroid_x", "centroid_y"])
+
+            # Save Clustered Observations to CSV
+            with csv_path.open("a", newline="") as f:
                 writer = csv.writer(f)
-                writer.writerow(["image_name", "label", "centroid_x", "centroid_y"])
+                for cluster in clustered:
+                    cx, cy = cluster.centroid
+                    writer.writerow([
+                        frame.image_name,
+                        cluster.label,
+                        cx,
+                        cy,
+                    ])
 
-        # Save Clustered Observations to CSV
-        with csv_path.open("a", newline="") as f:
-            writer = csv.writer(f)
-            for cluster in clustered:
-                cx, cy = cluster.centroid
-                writer.writerow([
-                    frame.image_name,
-                    cluster.label,
-                    cx,
-                    cy,
-                ])
-
-        heatmap_images_dir = self.output_dir / "heatmap_imgs"
-        heatmap_images_dir.mkdir(parents=True, exist_ok=True)
+            heatmap_images_dir = self.output_dir / "heatmap_imgs"
+            heatmap_images_dir.mkdir(parents=True, exist_ok=True)
 
         # Set Segmentation Types to Display MASKS
         mask_frame = None
@@ -641,13 +738,57 @@ class PriorityMapRunner:
             image,
             clustered,
         )
-        direction = self._smooth_vector(
-            self.direction.get_direction(
-                numerical_heatmap,
-                came_from,
-            ),
-            "_direction_ema",
+        numerical_heatmap = np.asarray(
+            numerical_heatmap
+            if numerical_heatmap is not None
+            else np.zeros(image.shape[:2], dtype=np.float32),
+            dtype=np.float32,
         )
+        maximum_heat = float(
+            np.max(numerical_heatmap)
+            if numerical_heatmap.size > 0
+            else 0.0
+        )
+        navigation_heatmap = (
+            numerical_heatmap
+            if maximum_heat >= self.DIRECTION_MINIMUM_HEAT
+            else np.zeros_like(numerical_heatmap)
+        )
+        direction_decision = self.direction.get_decision(
+            navigation_heatmap,
+            came_from=came_from,
+            forbidden_directions=external_forbidden_directions,
+            explore_when_empty=georeference_valid,
+        )
+        raw_direction = direction_decision.direction
+        direction = self._smooth_vector(
+            raw_direction,
+            "_direction_ema",
+            max_turn_degrees=self.max_direction_turn_degrees,
+        )
+        if (
+            direction is not None
+            and np.linalg.norm(direction) > 0
+            and (
+                self.direction.is_blocked_by_came_from(
+                    direction,
+                    came_from,
+                )
+                or self.direction.is_blocked_by_directions(
+                    direction,
+                    external_forbidden_directions,
+                )
+            )
+        ):
+            direction = np.asarray(raw_direction, dtype=np.float32)
+            self._direction_ema = direction.copy()
+
+        if direction is None or np.linalg.norm(direction) == 0:
+            direction_mode = "hold"
+        elif direction_decision.patch_heat > 0:
+            direction_mode = "target"
+        else:
+            direction_mode = "explore"
         heatmap_keep_running = True
         if heatmap_text is not None and heatmap_only is not None:
             out = heatmap_text
@@ -658,38 +799,49 @@ class PriorityMapRunner:
         out = self._draw_debug_directions(out, direction, came_from)
 
         # Save Heatmap Individual Heatmap Images
-        safe_imwrite(str(heatmap_images_dir / frame.image_name), heatmap_only)
+        if self.persist_artifacts:
+            safe_imwrite(str(heatmap_images_dir / frame.image_name), heatmap_only)
 
-        if scene_dict is not None:
+        graph_location_is_valid = (
+            georeference_valid
+            or not getattr(
+                self,
+                "require_cesium_georeference",
+                False,
+            )
+        )
+        if scene_dict is not None and graph_location_is_valid:
             add_result = self.graph_builder.add_nodes(clustered)
             self.graph_builder.resolve_scene_edge_intents(
                 scene_edge_intents,
                 add_result,
                 recent_graph_context,
             )
-            graph_frame = self.graph_builder.render_2d_graph_frame(view=self.graph_view)
-            if graph_frame is not None:
-                self.last_graph_frame = graph_frame
+            if self.persist_artifacts or self.debug:
+                graph_frame = self.graph_builder.render_2d_graph_frame(view=self.graph_view)
+                if graph_frame is not None:
+                    self.last_graph_frame = graph_frame
 
-        else:
+        elif graph_location_is_valid:
             self.graph_builder.assign_existing_node_ids(clustered)
 
-        # Save the DB node ID matched to each clustered mask for every frame.
-        assigned_node_ids = [
-            cluster.node_id
-            for cluster in clustered
-            if getattr(cluster, "node_id", None)
-        ]
-        max_node_id_length = max(map(len, assigned_node_ids), default=1)
-        node_ids = np.full(image.shape[:2], "", dtype=f"<U{max_node_id_length}")
-        for cluster in sorted(clustered, key=lambda cluster: cluster.score, reverse=True):
-            node_id = getattr(cluster, "node_id", None)
-            if not node_id:
-                continue
-            mask = cluster.mask.astype(bool)
-            node_ids[mask & (node_ids == "")] = node_id
-        node_ids_path = heatmap_images_dir / f"{Path(frame.image_name).stem}.nodes.npz"
-        np.savez_compressed(node_ids_path, node_ids=node_ids)
+        if self.persist_artifacts:
+            # Save the DB node ID matched to each clustered mask for every frame.
+            assigned_node_ids = [
+                cluster.node_id
+                for cluster in clustered
+                if getattr(cluster, "node_id", None)
+            ]
+            max_node_id_length = max(map(len, assigned_node_ids), default=1)
+            node_ids = np.full(image.shape[:2], "", dtype=f"<U{max_node_id_length}")
+            for cluster in sorted(clustered, key=lambda cluster: cluster.score, reverse=True):
+                node_id = getattr(cluster, "node_id", None)
+                if not node_id:
+                    continue
+                mask = cluster.mask.astype(bool)
+                node_ids[mask & (node_ids == "")] = node_id
+            node_ids_path = heatmap_images_dir / f"{Path(frame.image_name).stem}.nodes.npz"
+            np.savez_compressed(node_ids_path, node_ids=node_ids)
 
         if self.last_graph_frame is not None and out is not None:
             heatmap_height = out.shape[0]
@@ -741,9 +893,12 @@ class PriorityMapRunner:
             image_name=frame.image_name,
             image_path=frame.image_path,
             frame_index=frame.frame_index,
+            goal_found=goal_found,
+            georeference_valid=georeference_valid,
             heatmap_only=heatmap_only,
             numerical_heatmap=numerical_heatmap,
             direction=direction,
+            direction_mode=direction_mode,
             came_from=came_from,
             output_frame=out,
             latency_seconds={
@@ -754,6 +909,22 @@ class PriorityMapRunner:
             },
             keep_running=keep_running,
         )
+
+    @staticmethod
+    def _scene_contains_goal(scene_dict):
+        if not scene_dict:
+            return False
+
+        for label_info in scene_dict.values():
+            if not isinstance(label_info, dict):
+                continue
+            try:
+                if float(label_info.get("score")) == 100.0:
+                    return True
+            except (TypeError, ValueError):
+                continue
+
+        return False
 
     def _handle_graph_view_key(self):
         key = self.video_output.last_key

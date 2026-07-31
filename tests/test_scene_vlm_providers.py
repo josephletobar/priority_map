@@ -10,6 +10,7 @@ import numpy as np
 from priority_map.cli import parse_args
 from priority_map.modules.SceneUnderstanding import SceneUnderstanding
 from priority_map.modules.scene_vlm.providers import (
+    MAX_OUTPUT_TOKENS,
     OLLAMA_BASE_URL,
     OPENROUTER_BASE_URL,
     OllamaProvider,
@@ -128,11 +129,28 @@ class ProviderTransportTests(unittest.TestCase):
                 self.assertEqual(text, SCENE_RESPONSE)
                 request = adapter.client.responses.create.call_args.kwargs
                 self.assertEqual(request["model"], "org/model:release")
+                self.assertEqual(
+                    request["max_output_tokens"],
+                    MAX_OUTPUT_TOKENS,
+                )
                 image = request["input"][0]["content"][1]
                 self.assertEqual(
                     image["image_url"],
                     "data:image/jpeg;base64,encoded-image",
                 )
+                self.assertEqual(image["detail"], "low")
+                if provider_type is OpenAIProvider:
+                    self.assertEqual(
+                        request["reasoning"],
+                        {"effort": "none"},
+                    )
+                    self.assertEqual(
+                        request["text"],
+                        {"verbosity": "low"},
+                    )
+                else:
+                    self.assertNotIn("reasoning", request)
+                    self.assertNotIn("text", request)
 
     def test_ollama_uses_multimodal_chat_completions(self):
         adapter = OllamaProvider.__new__(OllamaProvider)
@@ -147,6 +165,7 @@ class ProviderTransportTests(unittest.TestCase):
         request = adapter.client.chat.completions.create.call_args.kwargs
         self.assertEqual(request["model"], "custom/model:q4")
         self.assertEqual(request["response_format"], {"type": "json_object"})
+        self.assertEqual(request["max_tokens"], MAX_OUTPUT_TOKENS)
         self.assertFalse(request["stream"])
         content = request["messages"][0]["content"]
         self.assertEqual(content[0], {"type": "text", "text": "prompt"})

@@ -60,7 +60,6 @@ class SceneUnderstanding:
                 self.vocabulary[label] = score
 
             updated_dict[label] = {
-                "reasoning": label_info["reasoning"],
                 "score": self.vocabulary[label]
             }
 
@@ -132,18 +131,16 @@ class SceneUnderstanding:
         for key, label_info in scene_dict.items():
             if not isinstance(label_info, dict):
                 raise ValueError(f"Expected label info object for {key!r}")
-            if "reasoning" not in label_info or "score" not in label_info:
-                raise ValueError(f"Scene label {key!r} must include reasoning and score")
+            if "score" not in label_info:
+                raise ValueError(f"Scene label {key!r} must include score")
 
             label = str(key).strip()
-            reasoning = str(label_info["reasoning"]).strip()
             score = float(label_info["score"])
 
-            if not label or not reasoning:
-                raise ValueError(f"Scene label {key!r} must have a non-empty label and reasoning")
+            if not label:
+                raise ValueError(f"Scene label {key!r} must have a non-empty label")
 
             normalized[label] = {
-                "reasoning": reasoning,
                 "score": score,
             }
 
@@ -245,27 +242,22 @@ class SceneUnderstanding:
 def debug():
     return SceneUnderstandingResult(labels={
         "trees": {
-            "reasoning": "Chosen as a major scene category, but scored at zero because trees are not useful for the example car-search task compared with roads or vehicles.",
             "score": 0,
         },
 
         "field": {
-            "reasoning": "Chosen because fields are broad searchable terrain, but scored low because they are weak context for cars relative to roads, buildings, and vehicles.",
             "score": 30,
         },
 
         "road": {
-            "reasoning": "Chosen because roads are strong car-search context and likely access paths, so they receive a high relevance score.",
             "score": 90,
         },
 
         "building": {
-            "reasoning": "Chosen because buildings indicate human activity and possible nearby parking or access, giving them moderate relevance for a car-search task.",
             "score": 55,
         },
 
         "vehicle": {
-            "reasoning": "Chosen because vehicles directly match the example car-search objective, so they receive the highest relevance score.",
             "score": 100,
         },
     }, edge_intents=[])
