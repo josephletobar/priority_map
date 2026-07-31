@@ -169,10 +169,10 @@ class PriorityMapRunner:
         )
         self.heatmap_video_output = VideoOutput(
             output_dir=self.output_dir,
-            show=False,
+            show=not debug,
             record=record,
             filename="heatmap.avi",
-            window_name="Heatmap Only",
+            window_name="Priority Heatmap",
             debug=debug,
         )
 
@@ -648,9 +648,10 @@ class PriorityMapRunner:
             ),
             "_direction_ema",
         )
+        heatmap_keep_running = True
         if heatmap_text is not None and heatmap_only is not None:
             out = heatmap_text
-            self.heatmap_video_output.handle_frame(
+            heatmap_keep_running = self.heatmap_video_output.handle_frame(
                 heatmap_text,
                 header=f"Task: {self.task}",
             )
@@ -726,12 +727,13 @@ class PriorityMapRunner:
 
         # Write Output Frame To Video
 
-        keep_running = self.video_output.handle_frame(
+        main_keep_running = self.video_output.handle_frame(
             out,
             header=f"Task: {self.task} | Graph: {self.graph_view.title()}",
             side_image=mask_frame,
             side_header=f"Mask(s): {', '.join(sorted(self.masks)) or 'None'}",
         )
+        keep_running = heatmap_keep_running and main_keep_running
         self._handle_graph_view_key()
         self.frames_processed += 1
         total_seconds = time.perf_counter() - frame_t0

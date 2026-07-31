@@ -2,20 +2,17 @@ import cv2
 import numpy as np
 import base64
 import json
-import os
 import re
 import sys
 import time
 from collections import deque
 from dataclasses import dataclass
 from dotenv import load_dotenv
-from openai import OpenAI
 from priority_map.config.prompts import GPT_VISION_PROMPT
-
-
-OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
-DEFAULT_GEMMA_MODEL = "google/gemma-4-31b-it"
-DEFAULT_OPENAI_MODEL = "gpt-5.4"
+from priority_map.modules.scene_vlm import (
+    create_scene_vlm_provider,
+    parse_scene_model,
+)
 
 
 @dataclass
@@ -25,46 +22,26 @@ class SceneUnderstandingResult:
 
 
 class SceneUnderstanding:
-    def __init__(self, debug=False, model=None, api_key=None, base_url=None):
+    def __init__(
+        self,
+        debug=False,
+        model=None,
+        provider_adapter=None,
+    ):
         load_dotenv()
-        self.model = self._resolve_model(model)
-        self.provider = self._provider_for_model(self.model)
-        self.client = self._create_client(api_key=api_key, base_url=base_url)
+        model_config = parse_scene_model(model)
+        self.model = model_config.model
+        self.provider = model_config.provider
+        self.provider_adapter = (
+            provider_adapter
+            if provider_adapter is not None
+            else create_scene_vlm_provider(self.provider)
+        )
         self.debug = debug
         self.vocabulary = {}
         self.vocabulary_alpha = 0.90
         self.scene_history = deque(maxlen=1)
         self.current_scene_dict = {}
-
-    def _resolve_model(self, model):
-        requested_model = model or os.getenv("SCENE_UNDERSTANDING_MODEL")
-        if requested_model:
-            requested_model = requested_model.strip()
-            if requested_model.lower() in {"gemma", "openrouter"}:
-                return DEFAULT_GEMMA_MODEL
-            if requested_model.lower() == "openai":
-                return DEFAULT_OPENAI_MODEL
-            return requested_model
-
-        return DEFAULT_OPENAI_MODEL
-
-    def _provider_for_model(self, model):
-        normalized = model.lower()
-        if normalized.startswith("google/") or "gemma" in normalized:
-            return "gemma"
-        return "openai"
-
-    def _create_client(self, api_key=None, base_url=None):
-        if self.provider == "openai":
-            client_kwargs = {"api_key": api_key or os.getenv("OPENAI_API_KEY")}
-            if base_url:
-                client_kwargs["base_url"] = base_url
-            return OpenAI(**client_kwargs)
-
-        return OpenAI(
-            api_key=api_key or os.getenv("OPENROUTER_API_KEY"),
-            base_url=base_url or os.getenv("OPENROUTER_BASE_URL", OPENROUTER_BASE_URL),
-        )
 
     def _debug_print(self, *args, **kwargs):
         if self.debug:
@@ -225,19 +202,10 @@ class SceneUnderstanding:
         )
 
         start = time.perf_counter()
-        response = self.client.responses.create(
-            model=self.model,
-            input=[{
-                "role": "user",
-                "content": [
-                    {"type": "input_text", "text": prompt},
-                    {
-                        "type": "input_image",
-                        "image_url": f"data:image/jpeg;base64,{image_b64}",
-                        "detail": "high"
-                    },
-                ],
-            }],
+        text = self.provider_adapter.analyze(
+            self.model,
+            prompt,
+            image_b64,
         )
         end = time.perf_counter()
         self._debug_print(
@@ -245,7 +213,6 @@ class SceneUnderstanding:
             f"({self.provider}: {self.model})"
         )
 
-        text = response.output_text
         self._debug_print(text)
 
         scene_result = self._normalize_scene_response(self._loads_json_object(text))

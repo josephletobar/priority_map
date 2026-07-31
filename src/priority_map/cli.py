@@ -49,7 +49,12 @@ def parse_args(argv=None):
     parser.add_argument("--sam-model-path", default=config.SAM_MODEL_PATH)
     parser.add_argument(
         "--scene-model",
-        help="Scene VLM model. Use 'gemma' for default OpenRouter Gemma, or an OpenAI model like 'gpt-5.4'.",
+        required=True,
+        metavar="PROVIDER:MODEL",
+        help=(
+            "Scene VLM provider and model. Supported providers are "
+            "openai, openrouter, and ollama."
+        ),
     )
     parser.add_argument(
         "--max-image-edge",

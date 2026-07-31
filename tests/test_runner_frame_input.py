@@ -35,7 +35,7 @@ class RunnerFrameInputTests(unittest.TestCase):
             patch("priority_map.runner.Heatmap"),
             patch("priority_map.runner.FlowLocalizer"),
             patch("priority_map.runner.GpsLocalizer"),
-            patch("priority_map.runner.VideoOutput"),
+            patch("priority_map.runner.VideoOutput") as video_output,
             patch("priority_map.runner.PanoramaBuilder"),
         ):
             runner = PriorityMapRunner(output_dir=temp_dir, record=False)
@@ -43,6 +43,12 @@ class RunnerFrameInputTests(unittest.TestCase):
                 self.assertIsNone(runner.dataset_root)
                 self.assertIsNone(runner.query_images_dir)
                 self.assertFalse(runner.has_next())
+                self.assertFalse(video_output.call_args_list[0].kwargs["show"])
+                self.assertTrue(video_output.call_args_list[1].kwargs["show"])
+                self.assertEqual(
+                    video_output.call_args_list[1].kwargs["window_name"],
+                    "Priority Heatmap",
+                )
             finally:
                 runner.close()
 
@@ -124,6 +130,7 @@ class RunnerFrameInputTests(unittest.TestCase):
             )
         )
         runner.heatmap_video_output = MagicMock()
+        runner.heatmap_video_output.handle_frame.return_value = True
         runner.graph_builder = MagicMock()
         runner.graph_builder.get_nearby_node_positions.return_value = [
             (2.5, 1.5),
