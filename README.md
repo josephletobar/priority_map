@@ -77,12 +77,18 @@ runner = PriorityMapRunner(
     task="Find cars",
     scene_model="openai:gpt-5.4",
     sam_model_path="models/sam3.pt",
+    max_observed_coverage_ratio=0.25,
+    coverage_lookahead_seconds=2.0,
     record=False,
 )
 try:
     while video_is_running:
         image = get_next_video_frame()  # NumPy BGR, BGRA, or grayscale image
-        frame_result = runner.run_frame(image)
+        frame_result = runner.run_frame(
+            image,
+            speed_mps=current_speed_mps,
+            cesium_metadata=current_camera_metadata,
+        )
         send_direction(frame_result.direction)
 finally:
     runner.close()
@@ -95,7 +101,8 @@ frame_result = runner.run_frame("incoming/frame_001.png")
 ```
 
 Optional per-frame values such as `image_name`, `frame_index`, `easting`,
-`northing`, `altitude`, and `orientation` can be passed as keyword arguments.
+`northing`, `altitude`, `orientation`, and `speed_mps` can be passed as keyword
+arguments.
 Calling `run_frame()` without an image retains the original behavior and reads
 the next image from the configured folder.
 
@@ -106,8 +113,8 @@ Each `PriorityFrameResult` includes:
 - `heatmap_only`: the JET-colored version used for display.
 - `direction`: a two-element unit vector pointing from the image center toward
   the strongest heatmap region. Regions are ranked by total heat, so both their
-  size and intensity matter. Before selecting a region, directions toward
-  `came_from` and up to 10 nearby graph nodes are masked from the search.
+  size and intensity matter. Before selecting a region, the cone around
+  `came_from` is masked from the search.
 - `came_from`: a two-element unit vector pointing back toward the previous
   drone position. It uses consecutive GPS poses when available and otherwise
   falls back to optical flow.
@@ -116,6 +123,12 @@ Direction vectors use navigation coordinates: positive X points right and
 positive Y points up/forward. An empty heatmap or centered target region returns
 `[0.0, 0.0]`. This is a visual navigation suggestion, not a flight-control
 command.
+
+With valid Cesium metadata and `speed_mps`, georeferenced graph nodes that have
+left the camera view are marked `observed`. Candidate directions are projected
+over `coverage_lookahead_seconds` and avoided when those regions cover more
+than `max_observed_coverage_ratio` of any sampled view. If every candidate is
+blocked by coverage, the hottest direction outside the `came_from` cone is used.
 
 ## Example Commands
 

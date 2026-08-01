@@ -3,7 +3,7 @@ import unittest
 
 import numpy as np
 
-from priority_map.modules.geospatial import (
+from priority_map.scripts.geospatial import (
     CesiumFrameMetadata,
     lonlat_to_local,
     segment_intersects_circle,
@@ -76,6 +76,44 @@ class CesiumFrameMetadataTests(unittest.TestCase):
             radius,
             0.5 * math.hypot(width / 5.0, height / 5.0),
         )
+
+    def test_local_ground_points_project_into_the_camera_view(self):
+        metadata = self.metadata(heading_degrees=0.0)
+        image_shape = (100, 100, 3)
+
+        self.assertTrue(
+            metadata.local_point_is_visible(
+                [0.0, 0.0],
+                [0.0, 0.0],
+                image_shape,
+            )
+        )
+        self.assertFalse(
+            metadata.local_point_is_visible(
+                [100.0, 0.0],
+                [0.0, 0.0],
+                image_shape,
+            )
+        )
+
+    def test_observed_circle_coverage_uses_union_area(self):
+        metadata = self.metadata()
+        image_shape = (100, 100, 3)
+        region = ([0.0, 0.0], 15.0)
+
+        single_ratio = metadata.observed_circle_coverage_ratio(
+            [0.0, 0.0],
+            image_shape,
+            [region],
+        )
+        duplicate_ratio = metadata.observed_circle_coverage_ratio(
+            [0.0, 0.0],
+            image_shape,
+            [region, region],
+        )
+
+        self.assertGreater(single_ratio, 0.0)
+        self.assertEqual(duplicate_ratio, single_ratio)
 
     def test_segment_circle_intersection_is_local_not_bearing_based(self):
         self.assertTrue(

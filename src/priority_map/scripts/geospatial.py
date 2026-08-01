@@ -1,8 +1,11 @@
+"""Geospatial conversion helpers for Cesium and GPS frame data."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
 import math
 
+import cv2
 import numpy as np
 
 
@@ -167,6 +170,108 @@ class CesiumFrameMetadata:
         if result_magnitude <= np.finfo(np.float64).eps:
             return np.zeros(2, dtype=np.float64)
         return result / result_magnitude
+
+    def project_local_point(
+        self,
+        point_en,
+        camera_center_en,
+        image_shape,
+    ) -> tuple[float, float]:
+        """Project a local east/north ground point into the camera image."""
+        point_en = np.asarray(point_en, dtype=np.float64)
+        camera_center_en = np.asarray(camera_center_en, dtype=np.float64)
+        if (
+            point_en.shape != (2,)
+            or camera_center_en.shape != (2,)
+            or not np.all(np.isfinite(point_en))
+            or not np.all(np.isfinite(camera_center_en))
+        ):
+            raise ValueError("Finite two-dimensional local positions are required.")
+
+        height, width = image_shape[:2]
+        footprint_width, footprint_height = self.footprint_size_m(image_shape)
+        image_right, image_up = self.image_basis_en()
+        offset = point_en - camera_center_en
+        offset_right = float(np.dot(offset, image_right))
+        offset_up = float(np.dot(offset, image_up))
+        center_x = (width - 1) / 2.0
+        center_y = (height - 1) / 2.0
+        return (
+            center_x + offset_right * float(width) / footprint_width,
+            center_y - offset_up * float(height) / footprint_height,
+        )
+
+    def local_point_is_visible(
+        self,
+        point_en,
+        camera_center_en,
+        image_shape,
+    ) -> bool:
+        pixel_x, pixel_y = self.project_local_point(
+            point_en,
+            camera_center_en,
+            image_shape,
+        )
+        height, width = image_shape[:2]
+        return bool(
+            0.0 <= pixel_x < float(width)
+            and 0.0 <= pixel_y < float(height)
+        )
+
+    def observed_circle_coverage_ratio(
+        self,
+        camera_center_en,
+        image_shape,
+        observed_regions,
+    ) -> float:
+        """Return the unioned screen area covered by local ground circles."""
+        height, width = image_shape[:2]
+        if width <= 0 or height <= 0:
+            return 0.0
+
+        footprint_width, footprint_height = self.footprint_size_m(image_shape)
+        coverage_mask = np.zeros((height, width), dtype=np.uint8)
+        for center_en, radius_m in observed_regions:
+            center_en = np.asarray(center_en, dtype=np.float64)
+            radius_m = float(radius_m)
+            if (
+                center_en.shape != (2,)
+                or not np.all(np.isfinite(center_en))
+                or not np.isfinite(radius_m)
+                or radius_m <= 0.0
+            ):
+                continue
+
+            pixel_x, pixel_y = self.project_local_point(
+                center_en,
+                camera_center_en,
+                image_shape,
+            )
+            radius_x = radius_m * float(width) / footprint_width
+            radius_y = radius_m * float(height) / footprint_height
+            if (
+                pixel_x + radius_x < 0.0
+                or pixel_x - radius_x >= float(width)
+                or pixel_y + radius_y < 0.0
+                or pixel_y - radius_y >= float(height)
+            ):
+                continue
+
+            cv2.ellipse(
+                coverage_mask,
+                (int(round(pixel_x)), int(round(pixel_y))),
+                (
+                    max(1, int(round(radius_x))),
+                    max(1, int(round(radius_y))),
+                ),
+                0.0,
+                0.0,
+                360.0,
+                1,
+                thickness=-1,
+            )
+
+        return float(np.count_nonzero(coverage_mask)) / float(coverage_mask.size)
 
 
 def segment_intersects_circle(

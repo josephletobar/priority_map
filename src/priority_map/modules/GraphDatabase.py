@@ -63,9 +63,18 @@ class PriorityMapDatabase:
         return self.get_original_task()
 
     def graph_context(self):
+        node_columns = {
+            row[1] for row in self.conn.execute("PRAGMA table_info(nodes)")
+        }
+        observed_column = (
+            "observed" if "observed" in node_columns else "0 AS observed"
+        )
         nodes = [
             dict(row)
-            for row in self.conn.execute("SELECT id, label, score FROM nodes ORDER BY id")
+            for row in self.conn.execute(
+                f"SELECT id, label, score, {observed_column} "
+                "FROM nodes ORDER BY id"
+            )
         ]
         edges = [
             dict(row)

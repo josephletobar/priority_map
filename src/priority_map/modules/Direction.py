@@ -9,7 +9,6 @@ from priority_map.config import params as config
 class DirectionDecision:
     direction: np.ndarray
     patch_heat: float
-    coverage_count: int
 
 
 class Direction:
@@ -31,30 +30,21 @@ class Direction:
         self,
         numerical_heatmap: np.ndarray,
         came_from: np.ndarray | None = None,
-        coverage_directions=None,
-        forbidden_directions=None,
         candidate_validator=None,
-        explore_when_empty=False,
     ) -> np.ndarray:
         return self.get_decision(
             numerical_heatmap,
             came_from=came_from,
-            coverage_directions=coverage_directions,
-            forbidden_directions=forbidden_directions,
             candidate_validator=candidate_validator,
-            explore_when_empty=explore_when_empty,
         ).direction
 
     def get_decision(
         self,
         numerical_heatmap: np.ndarray,
         came_from: np.ndarray | None = None,
-        coverage_directions=None,
-        forbidden_directions=None,
         candidate_validator=None,
-        explore_when_empty=False,
     ) -> DirectionDecision:
-        """Choose a non-backtracking patch using heat and graph coverage."""
+        """Choose the hottest patch outside the came-from cone."""
         numerical_heatmap = np.asarray(numerical_heatmap, dtype=np.float32)
         if numerical_heatmap.ndim != 2:
             raise ValueError("numerical_heatmap must be a two-dimensional array.")
@@ -65,16 +55,7 @@ class Direction:
             np.nan_to_num(numerical_heatmap),
             0,
         )
-        coverage_directions = list(coverage_directions or [])
-        hard_forbidden_directions = list(forbidden_directions or [])
-        if came_from is not None:
-            hard_forbidden_directions.append(came_from)
-        if (
-            not np.any(numerical_heatmap)
-            and not coverage_directions
-            and not hard_forbidden_directions
-            and not explore_when_empty
-        ):
+        if not np.any(numerical_heatmap):
             return self._hold_decision()
 
         height, width = numerical_heatmap.shape
@@ -114,46 +95,29 @@ class Direction:
                     (
                         patch_heat,
                         patch_direction,
-                        (
-                            self.is_blocked_by_directions(
-                                patch_direction,
-                                hard_forbidden_directions,
-                            )
-                            or (
-                                candidate_validator is not None
-                                and not candidate_validator(patch_direction)
-                            )
-                        ),
-                        self.coverage_count(
-                            patch_direction,
-                            coverage_directions,
-                        ),
                     )
                 )
 
         if not patches:
             return self._hold_decision()
 
-        non_backtracking = [patch for patch in patches if not patch[2]]
+        non_backtracking = [
+            patch
+            for patch in patches
+            if not self.is_blocked_by_came_from(patch[1], came_from)
+        ]
         if not non_backtracking:
             return self._hold_decision()
 
-        uncovered = [
+        feasible = [
             patch
             for patch in non_backtracking
-            if patch[3] == 0
+            if candidate_validator is None
+            or candidate_validator(patch[1])
         ]
-        if uncovered:
-            candidate_patches = uncovered
-        else:
-            minimum_coverage = min(patch[3] for patch in non_backtracking)
-            candidate_patches = [
-                patch
-                for patch in non_backtracking
-                if patch[3] == minimum_coverage
-            ]
+        candidate_patches = feasible or non_backtracking
 
-        patch_heat, direction, _, selected_coverage = max(
+        patch_heat, direction = max(
             candidate_patches,
             key=lambda patch: (
                 patch[0],
@@ -164,14 +128,12 @@ class Direction:
         return DirectionDecision(
             direction=np.asarray(direction, dtype=np.float32),
             patch_heat=patch_heat,
-            coverage_count=selected_coverage,
         )
 
     def _hold_decision(self):
         return DirectionDecision(
             direction=np.zeros(2, dtype=np.float32),
             patch_heat=0.0,
-            coverage_count=0,
         )
 
     def _patch_edges(self, length):
@@ -183,27 +145,25 @@ class Direction:
     def is_blocked_by_came_from(self, direction, came_from):
         if came_from is None:
             return False
-        return self.is_blocked_by_directions(direction, [came_from])
 
-    def is_blocked_by_directions(self, direction, forbidden_directions):
-        return self.coverage_count(direction, forbidden_directions) > 0
+        direction = np.asarray(direction, dtype=np.float32)
+        came_from = np.asarray(came_from, dtype=np.float32)
+        if (
+            direction.shape != (2,)
+            or came_from.shape != (2,)
+            or not np.all(np.isfinite(direction))
+            or not np.all(np.isfinite(came_from))
+        ):
+            return False
 
-    def coverage_count(self, direction, coverage_directions):
         direction_magnitude = np.linalg.norm(direction)
-        if direction_magnitude == 0:
-            return 0
+        came_from_magnitude = np.linalg.norm(came_from)
+        if direction_magnitude == 0 or came_from_magnitude == 0:
+            return False
 
-        direction = direction / direction_magnitude
+        cosine = np.dot(
+            direction / direction_magnitude,
+            came_from / came_from_magnitude,
+        )
         cone_cosine = np.cos(np.deg2rad(self.exclusion_angle_degrees))
-        count = 0
-        for vector in coverage_directions or []:
-            vector = np.asarray(vector, dtype=np.float32)
-            if vector.shape != (2,) or not np.all(np.isfinite(vector)):
-                continue
-            magnitude = np.linalg.norm(vector)
-            if magnitude == 0:
-                continue
-            vector = vector / magnitude
-            if np.dot(direction, vector) >= cone_cosine:
-                count += 1
-        return count
+        return bool(cosine >= cone_cosine)

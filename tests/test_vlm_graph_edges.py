@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+import sqlite3
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -83,6 +84,73 @@ class GraphBuilderEdgeTests(unittest.TestCase):
     def tearDown(self):
         self.builder.close()
         self.temp_dir.cleanup()
+
+    def test_observed_state_tracks_visible_georeferenced_nodes(self):
+        rows = [
+            ("visible_0", 0.0, 0.0),
+            ("outside_0", 100.0, 0.0),
+        ]
+        self.builder.cursor.executemany(
+            '''
+            INSERT INTO nodes
+            (id, label, score, count, geo_pos_x, geo_pos_y,
+             coordinate_mode, coverage_radius_m)
+            VALUES (?, ?, 50.0, 1, ?, ?, 'wgs84', 10.0)
+            ''',
+            [(node_id, node_id, x, y) for node_id, x, y in rows],
+        )
+        self.builder.conn.commit()
+
+        self.builder.update_observed_nodes(["visible_0"])
+        nodes = {
+            node["id"]: node
+            for node in self.builder.get_georeferenced_nodes()
+        }
+
+        self.assertFalse(nodes["visible_0"]["observed"])
+        self.assertTrue(nodes["outside_0"]["observed"])
+
+        self.builder.update_observed_nodes(["outside_0"])
+        nodes = {
+            node["id"]: node
+            for node in self.builder.get_georeferenced_nodes()
+        }
+        self.assertTrue(nodes["visible_0"]["observed"])
+        self.assertFalse(nodes["outside_0"]["observed"])
+
+    def test_existing_database_is_migrated_with_observed_default_false(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / "graph.db"
+            connection = sqlite3.connect(db_path)
+            connection.execute(
+                '''
+                CREATE TABLE nodes (
+                    id TEXT PRIMARY KEY,
+                    label TEXT NOT NULL,
+                    score REAL NOT NULL,
+                    count INTEGER NOT NULL,
+                    geo_pos_x REAL NOT NULL,
+                    geo_pos_y REAL NOT NULL,
+                    color_b INTEGER,
+                    color_g INTEGER,
+                    color_r INTEGER
+                )
+                '''
+            )
+            connection.commit()
+            connection.close()
+
+            migrated = GraphBuilder(Path(temp_dir))
+            try:
+                columns = {
+                    row[1]
+                    for row in migrated.cursor.execute(
+                        "PRAGMA table_info(nodes)"
+                    ).fetchall()
+                }
+                self.assertIn("observed", columns)
+            finally:
+                migrated.close()
 
     def test_resolves_current_and_prior_edges_and_deduplicates(self):
         prior = self.builder.add_nodes([cluster("vehicle", "vehicle", (900, 900))])

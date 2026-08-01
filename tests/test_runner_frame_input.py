@@ -9,7 +9,7 @@ import numpy as np
 
 from priority_map.modules.Direction import Direction, DirectionDecision
 from priority_map.modules.drone_motion import DroneMotion
-from priority_map.modules.geospatial import CesiumFrameMetadata
+from priority_map.scripts.geospatial import CesiumFrameMetadata
 from priority_map.runner import PriorityMapRunner
 
 
@@ -24,6 +24,8 @@ class RunnerFrameInputTests(unittest.TestCase):
         runner.drone_motion = DroneMotion()
         runner.vector_ema_alpha = 0.3
         runner.max_direction_turn_degrees = 12.0
+        runner.max_observed_coverage_ratio = 0.25
+        runner.coverage_lookahead_seconds = 2.0
         runner.persist_artifacts = False
         runner._direction_ema = None
         runner._came_from_ema = None
@@ -103,6 +105,110 @@ class RunnerFrameInputTests(unittest.TestCase):
         self.assertEqual(packet.altitude, 3.5)
         self.assertEqual(packet.orientation, (0.0, 0.0, 0.0, 1.0))
 
+    def test_cesium_visibility_updates_observed_graph_nodes(self):
+        runner = self.bare_runner()
+        metadata = CesiumFrameMetadata(
+            longitude=-121.87,
+            latitude=37.21,
+            camera_height_m=160.0,
+            ground_height_m=100.0,
+            heading_degrees=0.0,
+            vertical_fov_degrees=60.0,
+        )
+        runner._geographic_origin = (metadata.longitude, metadata.latitude)
+        runner.graph_builder = MagicMock()
+        runner.graph_builder.get_georeferenced_nodes.return_value = [
+            {"id": "inside", "position": (0.0, 0.0)},
+            {"id": "outside", "position": (100.0, 0.0)},
+        ]
+
+        runner._update_observed_nodes_for_frame(
+            SimpleNamespace(cesium_metadata=metadata),
+            np.zeros((100, 100, 3), dtype=np.uint8),
+        )
+
+        runner.graph_builder.update_observed_nodes.assert_called_once_with(
+            ["inside"]
+        )
+
+    def test_rollout_rejects_direction_over_coverage_threshold(self):
+        runner = self.bare_runner()
+        metadata = CesiumFrameMetadata(
+            longitude=-121.87,
+            latitude=37.21,
+            camera_height_m=160.0,
+            ground_height_m=100.0,
+            heading_degrees=0.0,
+            vertical_fov_degrees=60.0,
+        )
+        runner._geographic_origin = (metadata.longitude, metadata.latitude)
+        runner.graph_builder = MagicMock()
+        runner.graph_builder.get_georeferenced_nodes.return_value = [
+            {
+                "id": "observed",
+                "position": (20.0, 0.0),
+                "coverage_radius_m": 20.0,
+                "observed": True,
+            }
+        ]
+        image = np.zeros((100, 100, 3), dtype=np.uint8)
+
+        validator = runner._observed_region_validator(
+            SimpleNamespace(cesium_metadata=metadata),
+            image,
+            speed_mps=10.0,
+        )
+
+        self.assertIsNotNone(validator)
+        self.assertFalse(validator(np.array([1.0, 0.0])))
+        self.assertTrue(validator(np.array([-1.0, 0.0])))
+
+    def test_rollout_allows_coverage_equal_to_threshold(self):
+        runner = self.bare_runner()
+        metadata = CesiumFrameMetadata(
+            longitude=-121.87,
+            latitude=37.21,
+            camera_height_m=160.0,
+            ground_height_m=100.0,
+            heading_degrees=0.0,
+            vertical_fov_degrees=60.0,
+        )
+        runner._geographic_origin = (metadata.longitude, metadata.latitude)
+        runner.graph_builder = MagicMock()
+        runner.graph_builder.get_georeferenced_nodes.return_value = [
+            {
+                "id": "observed",
+                "position": (20.0, 0.0),
+                "coverage_radius_m": 20.0,
+                "observed": True,
+            }
+        ]
+        image = np.zeros((100, 100, 3), dtype=np.uint8)
+        validator = runner._observed_region_validator(
+            SimpleNamespace(cesium_metadata=metadata),
+            image,
+            speed_mps=10.0,
+        )
+
+        with patch.object(
+            CesiumFrameMetadata,
+            "observed_circle_coverage_ratio",
+            return_value=0.25,
+        ):
+            self.assertTrue(validator(np.array([1.0, 0.0])))
+        with patch.object(
+            CesiumFrameMetadata,
+            "observed_circle_coverage_ratio",
+            return_value=0.2501,
+        ):
+            self.assertFalse(validator(np.array([1.0, 0.0])))
+
+    def test_speed_validation_and_missing_speed_disable_rollout(self):
+        self.assertIsNone(PriorityMapRunner._validated_speed(None))
+        self.assertEqual(PriorityMapRunner._validated_speed(3.5), 3.5)
+        with self.assertRaises(ValueError):
+            PriorityMapRunner._validated_speed(-1.0)
+
     def test_run_frame_skips_folder_reader_when_image_is_supplied(self):
         runner = self.bare_runner()
         image = np.zeros((3, 3, 3), dtype=np.uint8)
@@ -121,10 +227,8 @@ class RunnerFrameInputTests(unittest.TestCase):
         runner.direction.get_decision.return_value = DirectionDecision(
             direction=np.array([1.0, 0.0], dtype=np.float32),
             patch_heat=100.0,
-            coverage_count=0,
         )
         runner.direction.is_blocked_by_came_from.return_value = False
-        runner.direction.coverage_count.return_value = 0
         runner.flow_localizer = MagicMock()
         runner.flow_localizer.cumulative_transform_dx = 0.0
         runner.flow_localizer.cumulative_transform_dy = 0.0
@@ -177,9 +281,7 @@ class RunnerFrameInputTests(unittest.TestCase):
             direction_call.kwargs["came_from"],
             came_from,
         )
-        self.assertIsNone(
-            direction_call.kwargs["forbidden_directions"],
-        )
+        self.assertIsNone(direction_call.kwargs["candidate_validator"])
         self.assertEqual(result.numerical_heatmap.shape, image.shape[:2])
         self.assertEqual(runner.frames_processed, 8)
         self.assertFalse(result.goal_found)

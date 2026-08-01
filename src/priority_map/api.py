@@ -29,6 +29,8 @@ def run_priority_map(
     vector_ema_alpha: float = config.VECTOR_EMA_ALPHA,
     max_direction_turn_degrees: float = config.MAX_DIRECTION_TURN_DEGREES,
     exclusion_angle_degrees: float = config.EXCLUSION_ANGLE_DEGREES,
+    max_observed_coverage_ratio: float = config.MAX_OBSERVED_COVERAGE_RATIO,
+    coverage_lookahead_seconds: float = config.COVERAGE_LOOKAHEAD_SECONDS,
 ) -> PriorityMapResult:
     runner = PriorityMapRunner(
         image_folder=image_folder,
@@ -51,6 +53,8 @@ def run_priority_map(
         vector_ema_alpha=vector_ema_alpha,
         max_direction_turn_degrees=max_direction_turn_degrees,
         exclusion_angle_degrees=exclusion_angle_degrees,
+        max_observed_coverage_ratio=max_observed_coverage_ratio,
+        coverage_lookahead_seconds=coverage_lookahead_seconds,
     )
 
     try:

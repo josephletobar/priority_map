@@ -68,7 +68,19 @@ def parse_args(argv=None):
         "--exclusion-angle-degrees",
         type=float,
         default=config.EXCLUSION_ANGLE_DEGREES,
-        help="Half-angle around each forbidden steering bearing.",
+        help="Half-angle around the came-from steering bearing.",
+    )
+    parser.add_argument(
+        "--max-observed-coverage-ratio",
+        type=float,
+        default=config.MAX_OBSERVED_COVERAGE_RATIO,
+        help="Maximum observed-region share allowed in a predicted camera view.",
+    )
+    parser.add_argument(
+        "--coverage-lookahead-seconds",
+        type=float,
+        default=config.COVERAGE_LOOKAHEAD_SECONDS,
+        help="Seconds to project each candidate direction forward.",
     )
     parser.add_argument("--debug", action="store_true")
     parser.add_argument("--panoramic", action="store_true")
@@ -97,6 +109,8 @@ def main(argv=None):
         camera_intrinsics=args.camera_intrinsics,
         scene_model=args.scene_model,
         exclusion_angle_degrees=args.exclusion_angle_degrees,
+        max_observed_coverage_ratio=args.max_observed_coverage_ratio,
+        coverage_lookahead_seconds=args.coverage_lookahead_seconds,
     )
 
     if args.debug:

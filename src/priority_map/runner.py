@@ -30,7 +30,7 @@ from priority_map.modules.object_localizing.localizer import LocalizationContext
 from priority_map.modules.object_localizing.flow_localizer import FlowLocalizer
 from priority_map.modules.object_localizing.gps_localizer import GpsLocalizer
 from priority_map.modules.PanoramaBuilder import PanoramaBuilder
-from priority_map.modules.geospatial import (
+from priority_map.scripts.geospatial import (
     CesiumFrameMetadata,
     lonlat_to_local,
 )
@@ -119,6 +119,8 @@ class PriorityMapRunner:
         vector_ema_alpha: float = config.VECTOR_EMA_ALPHA,
         max_direction_turn_degrees: float = config.MAX_DIRECTION_TURN_DEGREES,
         exclusion_angle_degrees: float = config.EXCLUSION_ANGLE_DEGREES,
+        max_observed_coverage_ratio: float = config.MAX_OBSERVED_COVERAGE_RATIO,
+        coverage_lookahead_seconds: float = config.COVERAGE_LOOKAHEAD_SECONDS,
         persist_artifacts: bool = True,
         require_cesium_georeference: bool = False,
     ):
@@ -147,8 +149,25 @@ class PriorityMapRunner:
                 "max_direction_turn_degrees must be greater than 0 "
                 "and at most 180."
             )
+        if not 0 <= max_observed_coverage_ratio <= 1:
+            raise ValueError(
+                "max_observed_coverage_ratio must be between 0 and 1."
+            )
+        if (
+            not np.isfinite(coverage_lookahead_seconds)
+            or coverage_lookahead_seconds <= 0
+        ):
+            raise ValueError(
+                "coverage_lookahead_seconds must be finite and greater than 0."
+            )
         self.vector_ema_alpha = vector_ema_alpha
         self.max_direction_turn_degrees = max_direction_turn_degrees
+        self.max_observed_coverage_ratio = float(
+            max_observed_coverage_ratio
+        )
+        self.coverage_lookahead_seconds = float(
+            coverage_lookahead_seconds
+        )
         self._direction_ema = None
         self._came_from_ema = None
         
@@ -457,6 +476,97 @@ class PriorityMapRunner:
 
         return segmentations
 
+    @staticmethod
+    def _validated_speed(speed_mps):
+        if speed_mps is not None:
+            speed_mps = float(speed_mps)
+            if not np.isfinite(speed_mps) or speed_mps < 0.0:
+                raise ValueError("speed_mps must be finite and nonnegative.")
+        return speed_mps
+
+    def _camera_center_en(self, cesium_metadata):
+        if self._geographic_origin is None:
+            return None
+        return lonlat_to_local(
+            cesium_metadata.longitude,
+            cesium_metadata.latitude,
+            self._geographic_origin[0],
+            self._geographic_origin[1],
+        )
+
+    def _update_observed_nodes_for_frame(self, frame, image):
+        metadata = frame.cesium_metadata
+        if metadata is None or not metadata.is_valid():
+            return
+        camera_center = self._camera_center_en(metadata)
+        if camera_center is None:
+            return
+
+        visible_node_ids = [
+            node["id"]
+            for node in self.graph_builder.get_georeferenced_nodes()
+            if metadata.local_point_is_visible(
+                node["position"],
+                camera_center,
+                image.shape,
+            )
+        ]
+        self.graph_builder.update_observed_nodes(visible_node_ids)
+
+    def _observed_region_validator(
+        self,
+        frame,
+        image,
+        speed_mps,
+    ):
+        metadata = frame.cesium_metadata
+        if (
+            speed_mps is None
+            or metadata is None
+            or not metadata.is_valid()
+        ):
+            return None
+
+        camera_center = self._camera_center_en(metadata)
+        if camera_center is None:
+            return None
+        observed_regions = [
+            (node["position"], node["coverage_radius_m"])
+            for node in self.graph_builder.get_georeferenced_nodes(
+                observed_only=True,
+            )
+            if node["coverage_radius_m"] is not None
+            and node["coverage_radius_m"] > 0.0
+        ]
+        if not observed_regions:
+            return None
+
+        sample_times = np.linspace(
+            self.coverage_lookahead_seconds / 5.0,
+            self.coverage_lookahead_seconds,
+            5,
+        )
+
+        def candidate_is_feasible(direction):
+            movement_direction = metadata.image_direction_to_en(direction)
+            if np.linalg.norm(movement_direction) == 0.0:
+                return True
+            for sample_time in sample_times:
+                predicted_center = (
+                    camera_center
+                    + movement_direction * speed_mps * float(sample_time)
+                )
+                coverage_ratio = metadata.observed_circle_coverage_ratio(
+                    predicted_center,
+                    image.shape,
+                    observed_regions,
+                )
+                if coverage_ratio > self.max_observed_coverage_ratio:
+                    return False
+            return True
+
+        return candidate_is_feasible
+
     def _draw_debug_directions(self, image, direction, came_from):
         if not self.debug or image is None:
             return image
@@ -601,10 +711,11 @@ class PriorityMapRunner:
         northing: float | None = None,
         altitude: float | None = None,
         orientation: tuple[float, float, float, float] | None = None,
-        external_forbidden_directions=None,
+        speed_mps: float | None = None,
         cesium_metadata: CesiumFrameMetadata | None = None,
     ):
         frame_t0 = time.perf_counter()
+        speed_mps = self._validated_speed(speed_mps)
         if image is None:
             frame = self.get_next_frame()
         else:
@@ -698,6 +809,7 @@ class PriorityMapRunner:
         )
 
         clustered = cluster_segmentations(segmentations)
+        self._update_observed_nodes_for_frame(frame, image)
 
         heatmap_images_dir = None
         if self.persist_artifacts:
@@ -749,19 +861,27 @@ class PriorityMapRunner:
             if maximum_heat >= self.DIRECTION_MINIMUM_HEAT
             else np.zeros_like(numerical_heatmap)
         )
+        candidate_validator = self._observed_region_validator(
+            frame,
+            image,
+            speed_mps,
+        )
         direction_decision = self.direction.get_decision(
             navigation_heatmap,
             came_from=came_from,
-            forbidden_directions=external_forbidden_directions,
-            explore_when_empty=georeference_valid,
+            candidate_validator=candidate_validator,
         )
         raw_direction = direction_decision.direction
+        raw_is_coverage_feasible = bool(
+            candidate_validator is None
+            or candidate_validator(raw_direction)
+        )
         direction = self._smooth_vector(
             raw_direction,
             "_direction_ema",
             max_turn_degrees=self.max_direction_turn_degrees,
         )
-        if (
+        smoothed_is_blocked = (
             direction is not None
             and np.linalg.norm(direction) > 0
             and (
@@ -769,12 +889,14 @@ class PriorityMapRunner:
                     direction,
                     came_from,
                 )
-                or self.direction.is_blocked_by_directions(
-                    direction,
-                    external_forbidden_directions,
+                or (
+                    candidate_validator is not None
+                    and raw_is_coverage_feasible
+                    and not candidate_validator(direction)
                 )
             )
-        ):
+        )
+        if smoothed_is_blocked:
             direction = np.asarray(raw_direction, dtype=np.float32)
             self._direction_ema = direction.copy()
 

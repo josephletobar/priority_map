@@ -64,7 +64,8 @@ class GraphBuilder:
                 first_seen_frame INTEGER,
                 observed_frame INTEGER,
                 observation_count INTEGER NOT NULL DEFAULT 1,
-                coordinate_mode TEXT NOT NULL DEFAULT 'flow'
+                coordinate_mode TEXT NOT NULL DEFAULT 'flow',
+                observed INTEGER NOT NULL DEFAULT 0
             )
         ''')
 
@@ -83,6 +84,7 @@ class GraphBuilder:
             'observed_frame': 'INTEGER',
             'observation_count': 'INTEGER NOT NULL DEFAULT 1',
             'coordinate_mode': "TEXT NOT NULL DEFAULT 'flow'",
+            'observed': 'INTEGER NOT NULL DEFAULT 0',
         }
         for column, declaration in node_column_migrations.items():
             if column not in node_columns:
@@ -288,6 +290,51 @@ class GraphBuilder:
         nearby.sort(key=lambda item: item[0])
         return [position for _, position in nearby[:limit]]
 
+    def get_georeferenced_nodes(self, observed_only=False):
+        where = "coordinate_mode = 'wgs84'"
+        if observed_only:
+            where += " AND observed = 1"
+        self.cursor.execute(
+            f'''
+            SELECT id, geo_pos_x, geo_pos_y, coverage_radius_m, observed
+            FROM nodes
+            WHERE {where}
+            '''
+        )
+        return [
+            {
+                "id": node_id,
+                "position": (float(x), float(y)),
+                "coverage_radius_m": (
+                    float(coverage_radius_m)
+                    if coverage_radius_m is not None
+                    else None
+                ),
+                "observed": bool(observed),
+            }
+            for node_id, x, y, coverage_radius_m, observed
+            in self.cursor.fetchall()
+        ]
+
+    def update_observed_nodes(self, visible_node_ids):
+        """Mark WGS84 nodes outside the current view as observed."""
+        visible_node_ids = tuple(dict.fromkeys(visible_node_ids or []))
+        self.cursor.execute(
+            "UPDATE nodes SET observed = 1 WHERE coordinate_mode = 'wgs84'"
+        )
+        if visible_node_ids:
+            placeholders = ",".join("?" for _ in visible_node_ids)
+            self.cursor.execute(
+                f'''
+                UPDATE nodes
+                SET observed = 0
+                WHERE coordinate_mode = 'wgs84'
+                  AND id IN ({placeholders})
+                ''',
+                visible_node_ids,
+            )
+        self.conn.commit()
+
     def _next_node_id(self, base_label):
         """Get next unique node_id for label by querying max from DB"""
         self.cursor.execute('''
@@ -424,6 +471,7 @@ class GraphBuilder:
                         UPDATE nodes
                         SET observed_frame = ?,
                             observation_count = ?,
+                            observed = 0,
                             coverage_radius_m = MAX(
                                 coverage_radius_m,
                                 ?
@@ -452,8 +500,8 @@ class GraphBuilder:
                 (id, label, score, count, geo_pos_x, geo_pos_y,
                  color_b, color_g, color_r, mask_blob, longitude, latitude,
                  ground_height_m, coverage_radius_m, observed_frame,
-                 first_seen_frame, observation_count, coordinate_mode)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 first_seen_frame, observation_count, coordinate_mode, observed)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (node_id, seg.label, self._to_float(seg.score), int(seg.count), float(x), float(y),
                   int(color[0]), int(color[1]), int(color[2]), mask_blob,
                   float(longitude) if longitude is not None else None,
@@ -462,7 +510,7 @@ class GraphBuilder:
                   float(coverage_radius_m) if coverage_radius_m is not None else None,
                   int(observed_frame) if observed_frame is not None else None,
                   int(observed_frame) if observed_frame is not None else None,
-                  1, coordinate_mode))
+                  1, coordinate_mode, 0))
 
             new_node_ids.append((node_id, x, y))
             seg.node_id = node_id
@@ -1007,8 +1055,12 @@ class GraphBuilder:
     def _get_nodes_and_edges(self, view=None):
         """Query nodes and edges for a graph view."""
         node_table, edge_table, resolved_view = self._view_tables(view)
+        observed_column = (
+            "observed" if node_table == "nodes" else "0 AS observed"
+        )
         self.cursor.execute(f'''
-            SELECT id, label, geo_pos_x, geo_pos_y, score, color_b, color_g, color_r
+            SELECT id, label, geo_pos_x, geo_pos_y, score,
+                   color_b, color_g, color_r, {observed_column}
             FROM {node_table}
         ''')
         nodes = {
@@ -1017,6 +1069,7 @@ class GraphBuilder:
                 'pos': (row[2], row[3]),
                 'score': self._to_float(row[4]),
                 'color': (row[5], row[6], row[7]),
+                'observed': bool(row[8]),
             }
             for row in self.cursor.fetchall()
         }
@@ -1113,7 +1166,7 @@ class GraphBuilder:
         node_placeholders = ','.join('?' for _ in node_ids)
         self.cursor.execute(
             f'''
-            SELECT id, label, score
+            SELECT id, label, score, observed
             FROM nodes
             WHERE id IN ({node_placeholders})
             ''',
@@ -1127,8 +1180,9 @@ class GraphBuilder:
                     "id": node_id,
                     "label": label,
                     "score": self._to_float(score),
+                    "observed": bool(observed),
                 }
-                for node_id, label, score in node_rows
+                for node_id, label, score, observed in node_rows
             ],
             "spatial_edges": [
                 {
