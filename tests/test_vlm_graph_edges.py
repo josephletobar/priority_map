@@ -1,11 +1,13 @@
 import tempfile
 import unittest
 import sqlite3
+from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import networkx as nx
+import cv2
 import numpy as np
 
 from priority_map.modules.GraphBuilder import GraphBuilder
@@ -14,12 +16,12 @@ from priority_map.runner import PriorityMapRunner
 from priority_map.scripts.cluster_segmentations import ClusteredSegmentation
 
 
-def cluster(label, source_label, position):
+def cluster(label, source_label, position, score=50):
     return ClusteredSegmentation(
         label=label,
         source_label=source_label,
         centroid=position,
-        score=50,
+        score=score,
         count=1,
         mask=np.ones((2, 2), dtype=np.uint8),
         geo_pos=position,
@@ -149,8 +151,71 @@ class GraphBuilderEdgeTests(unittest.TestCase):
                     ).fetchall()
                 }
                 self.assertIn("observed", columns)
+                self.assertIn("frame_blob", columns)
+                self.assertIn("visual_encoding", columns)
             finally:
                 migrated.close()
+
+    def test_priority_score_controls_visual_storage_encoding(self):
+        mask = np.zeros((120, 160), dtype=np.uint8)
+        mask[20:100, 40:120] = 1
+        frame = np.full((120, 160, 3), 127, dtype=np.uint8)
+        clusters = []
+        for index, score in enumerate((0, 25, 50, 75, 100)):
+            item = cluster(
+                f"priority_{score}",
+                f"priority_{score}",
+                (index * 1000, 0),
+                score=score,
+            )
+            item.mask = mask.copy()
+            clusters.append(item)
+
+        self.builder.add_nodes(clusters, frame_image=frame)
+        rows = {
+            score: (mask_blob, frame_blob, encoding)
+            for score, mask_blob, frame_blob, encoding in self.builder.cursor.execute(
+                '''
+                SELECT score, mask_blob, frame_blob, visual_encoding
+                FROM nodes
+                WHERE label LIKE 'priority_%'
+                '''
+            ).fetchall()
+        }
+
+        self.assertEqual(rows[0.0], (None, None, "metadata"))
+        self.assertEqual(rows[25.0], (None, None, "metadata"))
+
+        low_mask_blob, low_frame_blob, low_encoding = rows[50.0]
+        self.assertEqual(low_encoding, "mask_low")
+        self.assertIsNone(low_frame_blob)
+        with np.load(BytesIO(low_mask_blob), allow_pickle=False) as data:
+            self.assertEqual(data["mask"].shape, (48, 64))
+
+        full_mask_blob, full_frame_blob, full_encoding = rows[75.0]
+        self.assertEqual(full_encoding, "mask_full")
+        self.assertIsNone(full_frame_blob)
+        with np.load(BytesIO(full_mask_blob), allow_pickle=False) as data:
+            self.assertEqual(data["mask"].shape, mask.shape)
+
+        frame_mask_blob, frame_blob, frame_encoding = rows[100.0]
+        self.assertEqual(frame_encoding, "frame_jpeg")
+        self.assertIsNone(frame_mask_blob)
+        decoded_frame = cv2.imdecode(
+            np.frombuffer(frame_blob, dtype=np.uint8),
+            cv2.IMREAD_COLOR,
+        )
+        self.assertEqual(decoded_frame.shape, frame.shape)
+
+    def test_visual_storage_rejects_non_enum_priority_score(self):
+        invalid = cluster("invalid", "invalid", (0, 0), score=60)
+        with self.assertRaisesRegex(ValueError, "0, 25, 50, 75, or 100"):
+            self.builder.add_nodes([invalid], frame_image=np.zeros((2, 2, 3)))
+
+    def test_priority_100_requires_its_source_frame(self):
+        highest = cluster("highest", "highest", (0, 0), score=100)
+        with self.assertRaisesRegex(ValueError, "frame_image is required"):
+            self.builder.add_nodes([highest])
 
     def test_resolves_current_and_prior_edges_and_deduplicates(self):
         prior = self.builder.add_nodes([cluster("vehicle", "vehicle", (900, 900))])

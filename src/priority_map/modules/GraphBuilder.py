@@ -57,6 +57,10 @@ class GraphBuilder:
                 color_g INTEGER,
                 color_r INTEGER,
                 mask_blob BLOB,
+                frame_blob BLOB,
+                visual_encoding TEXT NOT NULL DEFAULT 'mask_full',
+                visual_height INTEGER,
+                visual_width INTEGER,
                 longitude REAL,
                 latitude REAL,
                 ground_height_m REAL,
@@ -76,6 +80,10 @@ class GraphBuilder:
                 'ALTER TABLE nodes ADD COLUMN mask_blob BLOB'
             )
         node_column_migrations = {
+            'frame_blob': 'BLOB',
+            'visual_encoding': "TEXT NOT NULL DEFAULT 'mask_full'",
+            'visual_height': 'INTEGER',
+            'visual_width': 'INTEGER',
             'longitude': 'REAL',
             'latitude': 'REAL',
             'ground_height_m': 'REAL',
@@ -211,20 +219,103 @@ class GraphBuilder:
         )
         self.conn.commit()
 
-    def _encode_mask(self, mask):
+    def _encode_mask(self, mask, *, low_resolution=False):
         if mask is None:
             return None
 
+        mask = np.asarray(mask, dtype=np.uint8)
+        original_shape = np.asarray(mask.shape[:2], dtype=np.int32)
+        encoded_mask = mask
+        if low_resolution and max(mask.shape[:2], default=0) > 64:
+            scale = 64.0 / float(max(mask.shape[:2]))
+            encoded_mask = cv2.resize(
+                mask,
+                (
+                    max(1, int(round(mask.shape[1] * scale))),
+                    max(1, int(round(mask.shape[0] * scale))),
+                ),
+                interpolation=cv2.INTER_NEAREST,
+            )
         buffer = BytesIO()
-        np.savez_compressed(buffer, mask=mask.astype(np.uint8))
+        np.savez_compressed(
+            buffer,
+            mask=encoded_mask,
+            original_shape=original_shape,
+        )
         return sqlite3.Binary(buffer.getvalue())
 
-    def _decode_mask(self, mask_blob):
+    def _decode_mask(self, mask_blob, fallback_shape=None):
         if not mask_blob:
+            if fallback_shape is not None:
+                return np.zeros(tuple(map(int, fallback_shape)), dtype=np.uint8)
             return np.ones((1, 1), dtype=np.uint8)
 
         with np.load(BytesIO(mask_blob), allow_pickle=False) as data:
-            return data["mask"].astype(np.uint8)
+            mask = data["mask"].astype(np.uint8)
+            if "original_shape" in data:
+                original_height, original_width = map(
+                    int,
+                    data["original_shape"],
+                )
+                if mask.shape[:2] != (original_height, original_width):
+                    mask = cv2.resize(
+                        mask,
+                        (original_width, original_height),
+                        interpolation=cv2.INTER_NEAREST,
+                    )
+            return mask
+
+    def _encode_frame(self, frame_image):
+        if frame_image is None:
+            return None
+        success, encoded = cv2.imencode(
+            ".jpg",
+            np.asarray(frame_image),
+            [cv2.IMWRITE_JPEG_QUALITY, 90],
+        )
+        if not success:
+            return None
+        return sqlite3.Binary(encoded.tobytes())
+
+    def _encode_node_visual(self, score, mask, frame_image):
+        score = self._to_float(score)
+        if score not in {0.0, 25.0, 50.0, 75.0, 100.0}:
+            raise ValueError(
+                "priority score must be one of 0, 25, 50, 75, or 100."
+            )
+        source = frame_image if frame_image is not None else mask
+        height, width = (
+            tuple(map(int, np.asarray(source).shape[:2]))
+            if source is not None
+            else (None, None)
+        )
+        if score in {0.0, 25.0}:
+            return None, None, "metadata", height, width
+        if score == 50.0:
+            return (
+                self._encode_mask(mask, low_resolution=True),
+                None,
+                "mask_low",
+                height,
+                width,
+            )
+        if score == 75.0:
+            return (
+                self._encode_mask(mask),
+                None,
+                "mask_full",
+                height,
+                width,
+            )
+        if frame_image is None:
+            raise ValueError("frame_image is required for priority score 100.")
+        return (
+            None,
+            self._encode_frame(frame_image),
+            "frame_jpeg",
+            height,
+            width,
+        )
 
     def _score_to_jet_color(self, score):
         heat_value = np.uint8([[np.clip(score, 0, 100) * 2.55]])
@@ -409,7 +500,7 @@ class GraphBuilder:
                 ),
             )
 
-    def add_nodes(self, clustered_segmentations):
+    def add_nodes(self, clustered_segmentations, frame_image=None):
         """Add ClusteredSegmentations as nodes and create edges within 200px distance"""
         # print(f"add_nodes called with {len(clustered_segmentations)} segmentations")
         # for seg in clustered_segmentations:
@@ -451,6 +542,33 @@ class GraphBuilder:
             )
             if match:
                 seg.node_id = match
+                (
+                    mask_blob,
+                    frame_blob,
+                    visual_encoding,
+                    visual_height,
+                    visual_width,
+                ) = self._encode_node_visual(
+                    seg.score,
+                    seg.mask,
+                    frame_image,
+                )
+                self.cursor.execute(
+                    '''
+                    UPDATE nodes
+                    SET mask_blob = ?, frame_blob = ?, visual_encoding = ?,
+                        visual_height = ?, visual_width = ?
+                    WHERE id = ?
+                    ''',
+                    (
+                        mask_blob,
+                        frame_blob,
+                        visual_encoding,
+                        visual_height,
+                        visual_width,
+                        match,
+                    ),
+                )
                 if is_geographic:
                     self.cursor.execute(
                         '''
@@ -494,16 +612,24 @@ class GraphBuilder:
             node_id = self._next_node_id(base_label)
 
             color = getattr(seg, 'color', None) or (0, 0, 0)
-            mask_blob = self._encode_mask(seg.mask)
+            (
+                mask_blob,
+                frame_blob,
+                visual_encoding,
+                visual_height,
+                visual_width,
+            ) = self._encode_node_visual(seg.score, seg.mask, frame_image)
             self.cursor.execute('''
                 INSERT OR REPLACE INTO nodes
                 (id, label, score, count, geo_pos_x, geo_pos_y,
-                 color_b, color_g, color_r, mask_blob, longitude, latitude,
+                 color_b, color_g, color_r, mask_blob, frame_blob,
+                 visual_encoding, visual_height, visual_width, longitude, latitude,
                  ground_height_m, coverage_radius_m, observed_frame,
                  first_seen_frame, observation_count, coordinate_mode, observed)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (node_id, seg.label, self._to_float(seg.score), int(seg.count), float(x), float(y),
-                  int(color[0]), int(color[1]), int(color[2]), mask_blob,
+                  int(color[0]), int(color[1]), int(color[2]), mask_blob, frame_blob,
+                  visual_encoding, visual_height, visual_width,
                   float(longitude) if longitude is not None else None,
                   float(latitude) if latitude is not None else None,
                   float(ground_height_m) if ground_height_m is not None else None,
@@ -615,6 +741,7 @@ class GraphBuilder:
             f'''
             SELECT id, label, score, count, geo_pos_x, geo_pos_y,
                    color_b, color_g, color_r, mask_blob,
+                   visual_height, visual_width,
                    longitude, latitude, ground_height_m,
                    coverage_radius_m, observed_frame
             FROM nodes WHERE id IN ({placeholders})
@@ -627,6 +754,7 @@ class GraphBuilder:
             (
                 node_id, label, score, count, x, y,
                 color_b, color_g, color_r, mask_blob,
+                visual_height, visual_width,
                 longitude, latitude, ground_height_m,
                 coverage_radius_m, observed_frame,
             ) = row
@@ -635,7 +763,12 @@ class GraphBuilder:
                 centroid=(int(round(x)), int(round(y))),
                 score=self._to_float(score),
                 count=count,
-                mask=self._decode_mask(mask_blob),
+                mask=self._decode_mask(
+                    mask_blob,
+                    fallback_shape=(visual_height, visual_width)
+                    if visual_height is not None and visual_width is not None
+                    else None,
+                ),
                 geo_pos=(x, y),
                 color=(color_b, color_g, color_r),
                 longitude=longitude,

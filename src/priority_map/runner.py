@@ -938,7 +938,10 @@ class PriorityMapRunner:
             )
         )
         if scene_dict is not None and graph_location_is_valid:
-            add_result = self.graph_builder.add_nodes(clustered)
+            add_result = self.graph_builder.add_nodes(
+                clustered,
+                frame_image=image,
+            )
             self.graph_builder.resolve_scene_edge_intents(
                 scene_edge_intents,
                 add_result,
