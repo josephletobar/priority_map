@@ -30,33 +30,40 @@ class Direction:
         self,
         numerical_heatmap: np.ndarray,
         came_from: np.ndarray | None = None,
-        candidate_validator=None,
     ) -> np.ndarray:
         return self.get_decision(
             numerical_heatmap,
             came_from=came_from,
-            candidate_validator=candidate_validator,
         ).direction
 
     def get_decision(
         self,
         numerical_heatmap: np.ndarray,
         came_from: np.ndarray | None = None,
-        candidate_validator=None,
     ) -> DirectionDecision:
-        """Choose the hottest patch outside the came-from cone."""
+        return self.get_candidate_decisions(
+            numerical_heatmap,
+            came_from=came_from,
+        )[0]
+
+    def get_candidate_decisions(
+        self,
+        numerical_heatmap: np.ndarray,
+        came_from: np.ndarray | None = None,
+    ) -> list[DirectionDecision]:
+        """Rank patches by heat after excluding the came-from cone."""
         numerical_heatmap = np.asarray(numerical_heatmap, dtype=np.float32)
         if numerical_heatmap.ndim != 2:
             raise ValueError("numerical_heatmap must be a two-dimensional array.")
         if numerical_heatmap.size == 0:
-            return self._hold_decision()
+            return [self._hold_decision()]
 
         numerical_heatmap = np.maximum(
             np.nan_to_num(numerical_heatmap),
             0,
         )
         if not np.any(numerical_heatmap):
-            return self._hold_decision()
+            return [self._hold_decision()]
 
         height, width = numerical_heatmap.shape
         row_edges = self._patch_edges(height)
@@ -99,7 +106,7 @@ class Direction:
                 )
 
         if not patches:
-            return self._hold_decision()
+            return [self._hold_decision()]
 
         non_backtracking = [
             patch
@@ -107,28 +114,48 @@ class Direction:
             if not self.is_blocked_by_came_from(patch[1], came_from)
         ]
         if not non_backtracking:
-            return self._hold_decision()
+            return [self._hold_decision()]
 
-        feasible = [
-            patch
-            for patch in non_backtracking
-            if candidate_validator is None
-            or candidate_validator(patch[1])
-        ]
-        candidate_patches = feasible or non_backtracking
-
-        patch_heat, direction = max(
-            candidate_patches,
+        ranked_patches = sorted(
+            non_backtracking,
             key=lambda patch: (
                 patch[0],
                 patch[1][1],
                 -abs(patch[1][0]),
             ),
+            reverse=True,
         )
-        return DirectionDecision(
-            direction=np.asarray(direction, dtype=np.float32),
-            patch_heat=patch_heat,
+        return [
+            DirectionDecision(
+                direction=np.asarray(direction, dtype=np.float32),
+                patch_heat=patch_heat,
+            )
+            for patch_heat, direction in ranked_patches
+        ]
+
+    def scene_diversity(self, numerical_heatmap: np.ndarray) -> float:
+        """Return normalized patch-heat variation in the range 0..1."""
+        numerical_heatmap = np.asarray(numerical_heatmap, dtype=np.float32)
+        if numerical_heatmap.ndim != 2 or numerical_heatmap.size == 0:
+            return 0.0
+        numerical_heatmap = np.maximum(
+            np.nan_to_num(numerical_heatmap),
+            0,
         )
+        row_edges = self._patch_edges(numerical_heatmap.shape[0])
+        column_edges = self._patch_edges(numerical_heatmap.shape[1])
+        patch_heats = np.asarray(
+            [
+                numerical_heatmap[top:bottom, left:right].sum(dtype=np.float64)
+                for top, bottom in zip(row_edges[:-1], row_edges[1:])
+                for left, right in zip(column_edges[:-1], column_edges[1:])
+            ],
+            dtype=np.float64,
+        )
+        mean_heat = float(np.mean(patch_heats))
+        if mean_heat <= np.finfo(np.float64).eps:
+            return 0.0
+        return float(np.clip(np.std(patch_heats) / mean_heat, 0.0, 1.0))
 
     def _hold_decision(self):
         return DirectionDecision(

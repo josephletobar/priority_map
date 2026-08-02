@@ -23,7 +23,8 @@ class RunnerFrameInputTests(unittest.TestCase):
         runner.direction = Direction()
         runner.drone_motion = DroneMotion()
         runner.vector_ema_alpha = 0.3
-        runner.max_direction_turn_degrees = 12.0
+        runner.direction_ema_alpha_min = 0.1
+        runner.direction_ema_alpha_max = 0.8
         runner.max_observed_coverage_ratio = 0.25
         runner.coverage_lookahead_seconds = 2.0
         runner.persist_artifacts = False
@@ -224,10 +225,13 @@ class RunnerFrameInputTests(unittest.TestCase):
         runner.drone_motion = MagicMock()
         runner.drone_motion.get_came_from.return_value = came_from
         runner.direction = MagicMock()
-        runner.direction.get_decision.return_value = DirectionDecision(
-            direction=np.array([1.0, 0.0], dtype=np.float32),
-            patch_heat=100.0,
-        )
+        runner.direction.scene_diversity.return_value = 0.0
+        runner.direction.get_candidate_decisions.return_value = [
+            DirectionDecision(
+                direction=np.array([1.0, 0.0], dtype=np.float32),
+                patch_heat=100.0,
+            )
+        ]
         runner.direction.is_blocked_by_came_from.return_value = False
         runner.flow_localizer = MagicMock()
         runner.flow_localizer.cumulative_transform_dx = 0.0
@@ -275,13 +279,12 @@ class RunnerFrameInputTests(unittest.TestCase):
         )
         np.testing.assert_array_equal(result.came_from, came_from)
         self.assertEqual(result.direction_mode, "target")
-        direction_call = runner.direction.get_decision.call_args
+        direction_call = runner.direction.get_candidate_decisions.call_args
         self.assertIs(direction_call.args[0], numerical_heatmap)
         np.testing.assert_array_equal(
             direction_call.kwargs["came_from"],
             came_from,
         )
-        self.assertIsNone(direction_call.kwargs["candidate_validator"])
         self.assertEqual(result.numerical_heatmap.shape, image.shape[:2])
         self.assertEqual(runner.frames_processed, 8)
         self.assertFalse(result.goal_found)
@@ -387,6 +390,58 @@ class RunnerFrameInputTests(unittest.TestCase):
             np.array([-0.75, -0.25]) / np.linalg.norm([-0.75, -0.25]),
         )
 
+    def test_direction_selection_checks_ema_preview_before_next_candidate(self):
+        runner = self.bare_runner()
+        runner.vector_ema_alpha = 0.5
+        runner._direction_ema = np.array([1.0, 0.0], dtype=np.float32)
+        runner.direction = MagicMock()
+        hottest = DirectionDecision(
+            direction=np.array([0.0, 1.0], dtype=np.float32),
+            patch_heat=100.0,
+        )
+        next_hottest = DirectionDecision(
+            direction=np.array([-1.0, 0.0], dtype=np.float32),
+            patch_heat=80.0,
+        )
+        runner.direction.get_candidate_decisions.return_value = [
+            hottest,
+            next_hottest,
+        ]
+        runner.direction.is_blocked_by_came_from.return_value = False
+
+        decision, output = runner._select_smoothed_direction(
+            np.ones((5, 5), dtype=np.float32),
+            came_from=None,
+            candidate_validator=lambda vector: vector[0] < 0.0,
+        )
+
+        self.assertIs(decision, next_hottest)
+        np.testing.assert_allclose(output, [-1.0, 0.0])
+        np.testing.assert_allclose(runner._direction_ema, output)
+
+    def test_direction_selection_falls_back_to_hottest_ema_preview(self):
+        runner = self.bare_runner()
+        runner.vector_ema_alpha = 0.5
+        runner._direction_ema = np.array([1.0, 0.0], dtype=np.float32)
+        runner.direction = MagicMock()
+        hottest = DirectionDecision(
+            direction=np.array([0.0, 1.0], dtype=np.float32),
+            patch_heat=100.0,
+        )
+        runner.direction.get_candidate_decisions.return_value = [hottest]
+        runner.direction.is_blocked_by_came_from.return_value = False
+
+        decision, output = runner._select_smoothed_direction(
+            np.ones((5, 5), dtype=np.float32),
+            came_from=None,
+            candidate_validator=lambda _: False,
+        )
+
+        expected = np.array([1.0, 1.0], dtype=np.float32) / np.sqrt(2.0)
+        self.assertIs(decision, hottest)
+        np.testing.assert_allclose(output, expected)
+        np.testing.assert_allclose(runner._direction_ema, [0.5, 0.5])
+
     def test_ema_zero_vector_clears_stale_direction(self):
         runner = self.bare_runner()
         runner._smooth_vector(
@@ -439,28 +494,6 @@ class RunnerFrameInputTests(unittest.TestCase):
         )
 
         np.testing.assert_allclose(reversed_direction, [-1.0, 0.0])
-
-    def test_direction_turn_can_be_hard_limited(self):
-        runner = self.bare_runner()
-        runner.vector_ema_alpha = 1.0
-        runner._smooth_vector(
-            np.array([1.0, 0.0], dtype=np.float32),
-            "_direction_ema",
-            max_turn_degrees=12.0,
-        )
-
-        limited = runner._smooth_vector(
-            np.array([0.0, 1.0], dtype=np.float32),
-            "_direction_ema",
-            max_turn_degrees=12.0,
-        )
-
-        expected_radians = np.deg2rad(12.0)
-        np.testing.assert_allclose(
-            limited,
-            [np.cos(expected_radians), np.sin(expected_radians)],
-            atol=1e-6,
-        )
 
 
 if __name__ == "__main__":

@@ -71,6 +71,18 @@ def parse_args(argv=None):
         help="Half-angle around the came-from steering bearing.",
     )
     parser.add_argument(
+        "--direction-ema-alpha-min",
+        type=float,
+        default=config.DIRECTION_EMA_ALPHA_MIN,
+        help="Direction EMA alpha used for uniform heatmaps.",
+    )
+    parser.add_argument(
+        "--direction-ema-alpha-max",
+        type=float,
+        default=config.DIRECTION_EMA_ALPHA_MAX,
+        help="Direction EMA alpha used for highly varied heatmaps.",
+    )
+    parser.add_argument(
         "--max-observed-coverage-ratio",
         type=float,
         default=config.MAX_OBSERVED_COVERAGE_RATIO,
@@ -108,6 +120,8 @@ def main(argv=None):
         gps_csv=args.gps_csv,
         camera_intrinsics=args.camera_intrinsics,
         scene_model=args.scene_model,
+        direction_ema_alpha_min=args.direction_ema_alpha_min,
+        direction_ema_alpha_max=args.direction_ema_alpha_max,
         exclusion_angle_degrees=args.exclusion_angle_degrees,
         max_observed_coverage_ratio=args.max_observed_coverage_ratio,
         coverage_lookahead_seconds=args.coverage_lookahead_seconds,

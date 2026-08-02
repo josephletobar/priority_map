@@ -117,7 +117,8 @@ class PriorityMapRunner:
         camera_intrinsics: str | Path | None = None,
         scene_model: str | None = None,
         vector_ema_alpha: float = config.VECTOR_EMA_ALPHA,
-        max_direction_turn_degrees: float = config.MAX_DIRECTION_TURN_DEGREES,
+        direction_ema_alpha_min: float = config.DIRECTION_EMA_ALPHA_MIN,
+        direction_ema_alpha_max: float = config.DIRECTION_EMA_ALPHA_MAX,
         exclusion_angle_degrees: float = config.EXCLUSION_ANGLE_DEGREES,
         max_observed_coverage_ratio: float = config.MAX_OBSERVED_COVERAGE_RATIO,
         coverage_lookahead_seconds: float = config.COVERAGE_LOOKAHEAD_SECONDS,
@@ -144,10 +145,9 @@ class PriorityMapRunner:
         self._geographic_origin = None
         if not 0 < vector_ema_alpha <= 1:
             raise ValueError("vector_ema_alpha must be greater than 0 and at most 1.")
-        if not 0 < max_direction_turn_degrees <= 180:
+        if not 0 < direction_ema_alpha_min <= direction_ema_alpha_max <= 1:
             raise ValueError(
-                "max_direction_turn_degrees must be greater than 0 "
-                "and at most 180."
+                "direction EMA alpha bounds must satisfy 0 < min <= max <= 1."
             )
         if not 0 <= max_observed_coverage_ratio <= 1:
             raise ValueError(
@@ -161,7 +161,8 @@ class PriorityMapRunner:
                 "coverage_lookahead_seconds must be finite and greater than 0."
             )
         self.vector_ema_alpha = vector_ema_alpha
-        self.max_direction_turn_degrees = max_direction_turn_degrees
+        self.direction_ema_alpha_min = float(direction_ema_alpha_min)
+        self.direction_ema_alpha_max = float(direction_ema_alpha_max)
         self.max_observed_coverage_ratio = float(
             max_observed_coverage_ratio
         )
@@ -607,11 +608,36 @@ class PriorityMapRunner:
         self,
         vector,
         state_attribute,
-        max_turn_degrees=None,
+    ):
+        ema_state, smoothed = self._calculate_smoothed_vector(
+            vector,
+            state_attribute,
+        )
+        setattr(self, state_attribute, ema_state)
+        return smoothed
+
+    def _preview_smoothed_vector(
+        self,
+        vector,
+        state_attribute,
+        alpha=None,
+    ):
+        """Calculate an EMA result without changing its stored state."""
+        _, smoothed = self._calculate_smoothed_vector(
+            vector,
+            state_attribute,
+            alpha=alpha,
+        )
+        return smoothed
+
+    def _calculate_smoothed_vector(
+        self,
+        vector,
+        state_attribute,
+        alpha=None,
     ):
         if vector is None:
-            setattr(self, state_attribute, None)
-            return None
+            return None, None
 
         current = np.asarray(vector, dtype=np.float32)
         if current.shape != (2,) or not np.all(np.isfinite(current)):
@@ -626,7 +652,7 @@ class PriorityMapRunner:
             if previous is None:
                 ema = current
             else:
-                alpha = self.vector_ema_alpha
+                alpha = self.vector_ema_alpha if alpha is None else float(alpha)
                 ema = alpha * current + (1.0 - alpha) * previous
 
         ema = np.asarray(ema, dtype=np.float32)
@@ -635,54 +661,59 @@ class PriorityMapRunner:
             ema = current
             ema_magnitude = np.linalg.norm(ema)
 
-        previous = getattr(self, state_attribute, None)
-        if (
-            max_turn_degrees is not None
-            and previous is not None
-            and ema_magnitude > 0
-        ):
-            ema = self._limit_vector_turn(
-                previous,
-                ema,
-                max_turn_degrees,
-            )
-            ema_magnitude = np.linalg.norm(ema)
-
-        setattr(self, state_attribute, ema)
         if ema_magnitude == 0:
-            return np.zeros(2, dtype=np.float32)
-        return np.asarray(ema / ema_magnitude, dtype=np.float32)
+            return ema, np.zeros(2, dtype=np.float32)
+        return ema, np.asarray(ema / ema_magnitude, dtype=np.float32)
 
-    def _limit_vector_turn(self, previous, candidate, max_turn_degrees):
-        previous = np.asarray(previous, dtype=np.float32)
-        candidate = np.asarray(candidate, dtype=np.float32)
-        previous_magnitude = np.linalg.norm(previous)
-        candidate_magnitude = np.linalg.norm(candidate)
-        if previous_magnitude == 0 or candidate_magnitude == 0:
-            return candidate
-
-        previous = previous / previous_magnitude
-        candidate = candidate / candidate_magnitude
-        dot = float(np.clip(np.dot(previous, candidate), -1.0, 1.0))
-        cross = float(
-            previous[0] * candidate[1] -
-            previous[1] * candidate[0]
+    def _select_smoothed_direction(
+        self,
+        numerical_heatmap,
+        came_from,
+        candidate_validator,
+        ema_alpha=None,
+    ):
+        candidates = self.direction.get_candidate_decisions(
+            numerical_heatmap,
+            came_from=came_from,
         )
-        signed_angle = float(np.arctan2(cross, dot))
-        maximum_angle = float(np.deg2rad(max_turn_degrees))
-        if abs(signed_angle) <= maximum_angle:
-            return candidate
-
-        limited_angle = np.copysign(maximum_angle, signed_angle)
-        cosine = np.cos(limited_angle)
-        sine = np.sin(limited_angle)
-        return np.array(
-            [
-                previous[0] * cosine - previous[1] * sine,
-                previous[0] * sine + previous[1] * cosine,
-            ],
-            dtype=np.float32,
+        fallback_decision = candidates[0]
+        fallback_state, fallback_direction = self._calculate_smoothed_vector(
+            fallback_decision.direction,
+            "_direction_ema",
+            alpha=ema_alpha,
         )
+        selected_decision = None
+        selected_state = None
+        selected_direction = None
+
+        for candidate in candidates:
+            ema_state, smoothed_direction = self._calculate_smoothed_vector(
+                candidate.direction,
+                "_direction_ema",
+                alpha=ema_alpha,
+            )
+            if self.direction.is_blocked_by_came_from(
+                smoothed_direction,
+                came_from,
+            ):
+                continue
+            if (
+                candidate_validator is not None
+                and not candidate_validator(smoothed_direction)
+            ):
+                continue
+            selected_decision = candidate
+            selected_state = ema_state
+            selected_direction = smoothed_direction
+            break
+
+        if selected_decision is None:
+            selected_decision = fallback_decision
+            selected_state = fallback_state
+            selected_direction = fallback_direction
+
+        self._direction_ema = selected_state
+        return selected_decision, selected_direction
 
     def close(self):
         if self._closed:
@@ -861,44 +892,23 @@ class PriorityMapRunner:
             if maximum_heat >= self.DIRECTION_MINIMUM_HEAT
             else np.zeros_like(numerical_heatmap)
         )
+        scene_diversity = self.direction.scene_diversity(navigation_heatmap)
+        direction_ema_alpha = (
+            self.direction_ema_alpha_min
+            + scene_diversity
+            * (self.direction_ema_alpha_max - self.direction_ema_alpha_min)
+        )
         candidate_validator = self._observed_region_validator(
             frame,
             image,
             speed_mps,
         )
-        direction_decision = self.direction.get_decision(
+        direction_decision, direction = self._select_smoothed_direction(
             navigation_heatmap,
-            came_from=came_from,
-            candidate_validator=candidate_validator,
+            came_from,
+            candidate_validator,
+            direction_ema_alpha,
         )
-        raw_direction = direction_decision.direction
-        raw_is_coverage_feasible = bool(
-            candidate_validator is None
-            or candidate_validator(raw_direction)
-        )
-        direction = self._smooth_vector(
-            raw_direction,
-            "_direction_ema",
-            max_turn_degrees=self.max_direction_turn_degrees,
-        )
-        smoothed_is_blocked = (
-            direction is not None
-            and np.linalg.norm(direction) > 0
-            and (
-                self.direction.is_blocked_by_came_from(
-                    direction,
-                    came_from,
-                )
-                or (
-                    candidate_validator is not None
-                    and raw_is_coverage_feasible
-                    and not candidate_validator(direction)
-                )
-            )
-        )
-        if smoothed_is_blocked:
-            direction = np.asarray(raw_direction, dtype=np.float32)
-            self._direction_ema = direction.copy()
 
         if direction is None or np.linalg.norm(direction) == 0:
             direction_mode = "hold"

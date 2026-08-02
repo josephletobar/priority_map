@@ -80,31 +80,23 @@ class DirectionTests(unittest.TestCase):
             np.array([1.0, 1.0], dtype=np.float32) / np.sqrt(2),
         )
 
-    def test_candidate_validator_rejects_patch_and_uses_next_best(self):
+    def test_candidate_decisions_are_ranked_by_heat(self):
         heatmap = np.zeros((100, 100), dtype=np.float32)
         heatmap[40:60, 80:100] = 100.0
         heatmap[0:20, 40:60] = 50.0
 
-        decision = Direction().get_decision(
-            heatmap,
-            candidate_validator=lambda direction: direction[0] <= 0.5,
-        )
+        decisions = Direction().get_candidate_decisions(heatmap)
 
-        self.assertGreater(decision.direction[1], 0.0)
-        self.assertLessEqual(decision.direction[0], 0.5)
+        self.assertGreater(decisions[0].patch_heat, decisions[1].patch_heat)
+        self.assertGreater(decisions[0].direction[0], 0.0)
 
-    def test_all_candidates_blocked_falls_back_to_hottest(self):
-        heatmap = np.zeros((101, 101), dtype=np.float32)
-        heatmap[50, 80] = 100.0
-        decision = Direction().get_decision(
-            heatmap,
-            candidate_validator=lambda _: False,
-        )
+    def test_scene_diversity_is_low_for_uniform_and_high_for_localized_heat(self):
+        uniform = np.ones((100, 100), dtype=np.float32)
+        localized = np.zeros((100, 100), dtype=np.float32)
+        localized[10, 10] = 100.0
 
-        np.testing.assert_allclose(
-            decision.direction,
-            np.array([1.0, 0.0], dtype=np.float32),
-        )
+        self.assertEqual(Direction().scene_diversity(uniform), 0.0)
+        self.assertEqual(Direction().scene_diversity(localized), 1.0)
 
     def test_heat_outside_a_forbidden_cone_remains_available(self):
         numerical_heatmap = np.zeros((101, 101), dtype=np.float32)

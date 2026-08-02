@@ -77,6 +77,8 @@ runner = PriorityMapRunner(
     task="Find cars",
     scene_model="openai:gpt-5.4",
     sam_model_path="models/sam3.pt",
+    direction_ema_alpha_min=0.1,
+    direction_ema_alpha_max=0.8,
     max_observed_coverage_ratio=0.25,
     coverage_lookahead_seconds=2.0,
     record=False,
@@ -125,10 +127,15 @@ positive Y points up/forward. An empty heatmap or centered target region returns
 command.
 
 With valid Cesium metadata and `speed_mps`, georeferenced graph nodes that have
-left the camera view are marked `observed`. Candidate directions are projected
-over `coverage_lookahead_seconds` and avoided when those regions cover more
-than `max_observed_coverage_ratio` of any sampled view. If every candidate is
-blocked by coverage, the hottest direction outside the `came_from` cone is used.
+left the camera view are marked `observed`. Heat-ranked candidates are previewed
+through the direction EMA, then projected over `coverage_lookahead_seconds` and
+avoided when those regions cover more than `max_observed_coverage_ratio` of any
+sampled view. If every candidate is blocked, the hottest EMA result is used.
+
+Direction EMA alpha scales linearly between `direction_ema_alpha_min` and
+`direction_ema_alpha_max` using the normalized variation of the 5x5 patch-heat
+distribution. Uniform heat stays strongly smoothed; concentrated heat responds
+more quickly.
 
 ## Example Commands
 
