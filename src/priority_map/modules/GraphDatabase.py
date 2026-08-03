@@ -1,4 +1,6 @@
+import base64
 import sqlite3
+from io import BytesIO
 from pathlib import Path
 
 import cv2
@@ -83,6 +85,73 @@ class PriorityMapDatabase:
             )
         ]
         return nodes, edges
+
+    def get_model_edges(self):
+        """Return VLM-created textual relationships for graph-agent context."""
+        tables = {
+            row[0]
+            for row in self.conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            )
+        }
+        if "model_edges" not in tables:
+            return []
+        return [
+            dict(row)
+            for row in self.conn.execute(
+                "SELECT source_id, target_id, text, created_by "
+                "FROM model_edges ORDER BY source_id, target_id, text"
+            )
+        ]
+
+    @staticmethod
+    def _mask_to_png_base64(mask_blob):
+        with np.load(BytesIO(mask_blob), allow_pickle=False) as data:
+            mask = data["mask"].astype(np.uint8)
+        if mask.max(initial=0) <= 1:
+            mask = mask * 255
+        success, encoded = cv2.imencode(".png", mask)
+        if not success:
+            return None
+        return base64.b64encode(encoded.tobytes()).decode("ascii")
+
+    def get_visual_inputs(self):
+        """Return stored node visuals as provider-ready base64 PNG/JPEG images."""
+        visuals = []
+        for table in ("nodes", "semantic_nodes"):
+            columns = {
+                row[1] for row in self.conn.execute(f'PRAGMA table_info("{table}")')
+            }
+            if not columns or "mask_blob" not in columns:
+                continue
+            selected = ["id", "mask_blob"]
+            if "frame_blob" in columns:
+                selected.append("frame_blob")
+            for row in self.conn.execute(
+                f'SELECT {", ".join(selected)} FROM "{table}" ORDER BY id'
+            ):
+                node_id = row[0]
+                mask_blob = row[1]
+                frame_blob = row[2] if len(selected) > 2 else None
+                if frame_blob:
+                    visuals.append({
+                        "table": table,
+                        "node_id": node_id,
+                        "kind": "frame",
+                        "mime_type": "image/jpeg",
+                        "image_base64": base64.b64encode(frame_blob).decode("ascii"),
+                    })
+                elif mask_blob:
+                    image_base64 = self._mask_to_png_base64(mask_blob)
+                    if image_base64:
+                        visuals.append({
+                            "table": table,
+                            "node_id": node_id,
+                            "kind": "mask",
+                            "mime_type": "image/png",
+                            "image_base64": image_base64,
+                        })
+        return visuals
 
     @staticmethod
     def _score_color(score):

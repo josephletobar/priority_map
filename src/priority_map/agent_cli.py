@@ -1,12 +1,21 @@
 import argparse
 
-from priority_map.modules.GraphAgent import review_priority_map_db
+from priority_map.modules.GraphAgent import ask_priority_map_db
 
 
 def parse_args(argv=None):
-    parser = argparse.ArgumentParser(description="Review and reprioritize a PriorityMap graph database.")
+    parser = argparse.ArgumentParser(description="Ask a question about a PriorityMap graph database.")
     parser.add_argument("db_path", help="Path to a PriorityMap graph.db file.")
-    parser.add_argument("--update", required=True, help="Freeform task update or additional context.")
+    parser.add_argument("--question", required=True, help="Question to answer using the graph database.")
+    parser.add_argument(
+        "--scene-model",
+        required=True,
+        metavar="PROVIDER:MODEL",
+        help=(
+            "Scene VLM provider and model. Supported providers are "
+            "openai, openrouter, and ollama."
+        ),
+    )
     parser.add_argument("--original-task", help="Backfill the original task for an older database.")
     parser.add_argument("--debug", action="store_true")
     return parser.parse_args(argv)
@@ -14,17 +23,14 @@ def parse_args(argv=None):
 
 def main(argv=None):
     args = parse_args(argv)
-    result = review_priority_map_db(
+    result = ask_priority_map_db(
         args.db_path,
-        args.update,
+        args.question,
         original_task=args.original_task,
         debug=args.debug,
+        scene_model=args.scene_model,
     )
-    print(f"Updated {len(result['changes'])} node(s) in {result['db_path']}")
-    if result["reasoning"]:
-        print(result["reasoning"])
-    for node_id, old_score, new_score in result["changes"]:
-        print(f"{node_id}: {old_score:.0f} -> {new_score:.0f}")
+    print(result["answer"])
     return result
 
 

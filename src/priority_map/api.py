@@ -4,7 +4,7 @@ import cv2
 
 from priority_map.config import params as config
 from priority_map.runner import PriorityMapResult, PriorityMapRunner
-from priority_map.modules.GraphAgent import review_priority_map_db
+from priority_map.modules.GraphAgent import ask_priority_map_db
 
 
 def run_priority_map(

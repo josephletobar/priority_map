@@ -15,6 +15,18 @@ class SceneVlmProvider(Protocol):
         """Analyze one image and return the provider's response text."""
         ...
 
+    def analyze_many(
+        self,
+        model: str,
+        prompt: str,
+        images_base64: list[str],
+        image_mime_types: list[str] | None = None,
+        json_mode: bool = True,
+        image_labels: list[str] | None = None,
+    ) -> str:
+        """Analyze text with zero or more images and return response text."""
+        ...
+
 
 @dataclass(frozen=True)
 class SceneModelConfig:
@@ -24,18 +36,42 @@ class SceneModelConfig:
 
 class _ResponsesProvider:
     def analyze(self, model: str, prompt: str, image_base64: str) -> str:
+        return self.analyze_many(
+            model,
+            prompt,
+            [image_base64],
+            ["image/jpeg"],
+        )
+
+    def analyze_many(
+        self,
+        model: str,
+        prompt: str,
+        images_base64: list[str],
+        image_mime_types: list[str] | None = None,
+        json_mode: bool = True,
+        image_labels: list[str] | None = None,
+    ) -> str:
+        content = [{"type": "input_text", "text": prompt}]
+        mime_types = image_mime_types or ["image/jpeg"] * len(images_base64)
+        for index, (image_base64, mime_type) in enumerate(
+            zip(images_base64, mime_types)
+        ):
+            if image_labels:
+                content.append({
+                    "type": "input_text",
+                    "text": image_labels[index],
+                })
+            content.append({
+                "type": "input_image",
+                "image_url": f"data:{mime_type};base64,{image_base64}",
+                "detail": getattr(self, "image_detail", "low"),
+            })
         request_options = dict(
             model=model,
             input=[{
                 "role": "user",
-                "content": [
-                    {"type": "input_text", "text": prompt},
-                    {
-                        "type": "input_image",
-                        "image_url": f"data:image/jpeg;base64,{image_base64}",
-                        "detail": getattr(self, "image_detail", "low"),
-                    },
-                ],
+                "content": content,
             }],
             max_output_tokens=MAX_OUTPUT_TOKENS,
         )
@@ -79,22 +115,48 @@ class OllamaProvider:
         )
 
     def analyze(self, model: str, prompt: str, image_base64: str) -> str:
-        response = self.client.chat.completions.create(
-            model=model,
-            messages=[{
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": prompt},
-                    {
-                        "type": "image_url",
-                        "image_url": f"data:image/jpeg;base64,{image_base64}",
-                    },
-                ],
-            }],
-            response_format={"type": "json_object"},
-            max_tokens=MAX_OUTPUT_TOKENS,
-            stream=False,
+        return self.analyze_many(
+            model,
+            prompt,
+            [image_base64],
+            ["image/jpeg"],
         )
+
+    def analyze_many(
+        self,
+        model: str,
+        prompt: str,
+        images_base64: list[str],
+        image_mime_types: list[str] | None = None,
+        json_mode: bool = True,
+        image_labels: list[str] | None = None,
+    ) -> str:
+        content = [{"type": "text", "text": prompt}]
+        mime_types = image_mime_types or ["image/jpeg"] * len(images_base64)
+        for index, (image_base64, mime_type) in enumerate(
+            zip(images_base64, mime_types)
+        ):
+            if image_labels:
+                content.append({
+                    "type": "text",
+                    "text": image_labels[index],
+                })
+            content.append({
+                "type": "image_url",
+                "image_url": f"data:{mime_type};base64,{image_base64}",
+            })
+        request = {
+            "model": model,
+            "messages": [{
+                "role": "user",
+                "content": content,
+            }],
+            "max_tokens": MAX_OUTPUT_TOKENS,
+            "stream": False,
+        }
+        if json_mode:
+            request["response_format"] = {"type": "json_object"}
+        response = self.client.chat.completions.create(**request)
         content = response.choices[0].message.content
         if content is None:
             raise ValueError("Ollama returned an empty scene-understanding response")

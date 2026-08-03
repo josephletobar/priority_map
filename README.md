@@ -44,7 +44,7 @@ priority-map --img-folder PATH --scene-model PROVIDER:MODEL --sam-model-path PAT
 ### `priority-map-agent`
 
 ```text
-priority-map-agent DB_PATH --update TEXT [OPTIONS]
+priority-map-agent DB_PATH --scene-model PROVIDER:MODEL --question TEXT [OPTIONS]
 ```
 
 #### Required arguments
@@ -52,7 +52,8 @@ priority-map-agent DB_PATH --update TEXT [OPTIONS]
 | Argument | Description |
 | --- | --- |
 | `DB_PATH` | Path to an existing PriorityMap `graph.db`. |
-| `--update TEXT` | Freeform task update or additional context used to reprioritize graph nodes. |
+| `--question TEXT` | Question to answer using the graph, relationships, and attached visuals. |
+| `--scene-model PROVIDER:MODEL` | Scene VLM provider and model. Supported providers are `openai`, `openrouter`, and `ollama`. |
 
 #### Optional arguments
 
@@ -165,16 +166,16 @@ priority-map --img-folder D:\Train\Train\query_images --gps D:\Train\Train\query
 
 ## Review an existing graph DB
 
-`priority-map-agent` revises priorities in an existing PriorityMap `graph.db` using a freeform update:
+`priority-map-agent` answers questions about an existing PriorityMap `graph.db`:
 
 ```bash
-priority-map-agent examples\car_search\graph.db --update "new information for the search"
+priority-map-agent examples\car_search\graph.db --scene-model ollama:gemma3 --question "Which area is most likely to contain the target?"
 ```
 
 For an older database that does not yet record its original task, provide it once:
 
 ```bash
-priority-map-agent examples\car_search\graph.db --original-task "original task" --update "new information"
+priority-map-agent examples\car_search\graph.db --scene-model ollama:gemma3 --original-task "original task" --question "What evidence supports the most likely target location?"
 ```
 
 ## Scene-understanding providers
