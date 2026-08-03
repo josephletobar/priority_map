@@ -30,7 +30,7 @@ def cluster(label, source_label, position, score=50):
 
 
 class SceneResponseTests(unittest.TestCase):
-    def test_normalizes_compact_edges_and_skips_malformed_entries(self):
+    def test_normalizes_compact_and_longer_edges_and_skips_malformed_entries(self):
         scene = SceneUnderstanding.__new__(SceneUnderstanding)
         result = scene._normalize_scene_response({
             "labels": {
@@ -40,7 +40,7 @@ class SceneResponseTests(unittest.TestCase):
                     "edges": [
                         {"to_label": "building", "text": "Supports"},
                         {"to_node_id": "vehicle_0", "text": "Likely Contains"},
-                        {"to_label": "building", "text": "this label is too long"},
+                        {"to_label": "building", "text": "this longer relationship label is allowed"},
                         {"to_label": "building", "text": ""},
                         "invalid",
                     ],
@@ -63,6 +63,11 @@ class SceneResponseTests(unittest.TestCase):
                 "source_label": "road",
                 "to_node_id": "vehicle_0",
                 "text": "likely_contains",
+            },
+            {
+                "source_label": "road",
+                "to_label": "building",
+                "text": "this_longer_relationship_label_is_allowed",
             },
         ])
 
