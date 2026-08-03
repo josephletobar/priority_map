@@ -54,9 +54,9 @@ For each visible category, output:
   interpreting how the entities affect, constrain, enable, obscure, organize, or
   otherwise meaningfully relate to one another. The relationship must add
   mission-relevant information that the node labels and coordinates do not already
-  provide. Prefer a few high-value edges over a dense graph. Return an empty list
-  when no such relationship is clearly supported.
-
+  provide.
+  Return an empty list when no such relationship is clearly supported.
+    
 Scoring guide:
 - 0 = not relevant 
 - 25 = weak context
