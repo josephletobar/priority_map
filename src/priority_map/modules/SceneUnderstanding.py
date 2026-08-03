@@ -22,6 +22,10 @@ class SceneUnderstandingResult:
 
 
 class SceneUnderstanding:
+    # Keep model relationships concise while allowing useful multi-word
+    # relations such as "separated from by canal".
+    MAX_EDGE_WORDS = 12
+
     def __init__(
         self,
         debug=False,
@@ -175,7 +179,7 @@ class SceneUnderstanding:
 
     def _normalize_edge_text(self, text):
         words = re.findall(r"[a-z0-9]+", str(text).strip().lower())
-        if not 1 <= len(words) <= 2:
+        if not 1 <= len(words) <= self.MAX_EDGE_WORDS:
             return ""
         return "_".join(words)
     

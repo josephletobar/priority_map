@@ -43,8 +43,8 @@ For each visible category, output:
 - "edges": optional relationships originating from this label.
   Use "to_label" to connect to another label in this response, or "to_node_id"
   to connect to an existing node from recent graph context. The "text" must be a
-  concise relationship label containing only one or two lowercase words joined
-  by a single underscore. Do not put explanations, evidence, or full sentences
+  concise relationship label containing at most twelve lowercase words joined
+  by single underscores. Do not put explanations, evidence, or full sentences
   in edge text.
   Model edges must complement the numeric coordinate graph rather than translate
   it into words. Do not create an edge merely because two entities are nearby,
@@ -76,8 +76,8 @@ Rules:
 - Prioritize probability over possibility
 - Use global spatial context when assigning scores, including adjacency, enclosure, isolation, clustering, and scene layout
 - Use recent graph context when it changes likely broader environment, continuity, or score stability
-- Edge relationship types are freeform, but their text must use the compact one-
-  or two-word label format described above
+- Edge relationship types are freeform, but their text must use the compact
+  twelve-word label format described above
 - Never use model edges as natural-language restatements of coordinate geometry
 
 Return exactly one valid JSON object with double-quoted keys and strings, no trailing commas, and no markdown.
